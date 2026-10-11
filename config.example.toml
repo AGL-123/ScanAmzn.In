@@ -1,0 +1,130 @@
+# ScanAmzn.In configuration.
+#
+#   cp config.example.toml config.toml      # then edit config.toml
+#
+# Any string can use ${ENV_VAR} to read a secret from the environment instead
+# of storing it in this file. Only variables of the channels you enable need to
+# be set.
+
+[amazon]
+domain = "www.amazon.in"
+
+# Product pages to watch (the 10-character ASIN from the URL:
+# https://www.amazon.in/dp/B0XXXXXXXX). Product pages are the most reliable
+# signal. Run `python -m scanamzn discover` to list candidate ASINs.
+asins = [
+    # "B0XXXXXXXX",  # PlayStation Network Wallet Top-Up ₹1000
+]
+
+# Searches run every cycle (see monitor.search_every_cycles). Matching listings
+# (see [filter]) are watched automatically, and an in-stock hit is confirmed on
+# its product page before you are alerted. A full https:// search URL also works.
+search_queries = [
+    "playstation gift card",
+    "psn wallet top up card",
+    "playstation store gift card india",
+]
+
+# "auto" uses curl_cffi (Chrome TLS fingerprint, far fewer captchas) when it is
+# installed, else plain requests.
+http_backend = "auto"
+# Optional HTTP(S) proxy, e.g. "http://user:pass@host:port".
+proxy = ""
+request_timeout = 20
+
+
+[monitor]
+# Seconds between check cycles (randomised by +/- jitter). Below ~30s Amazon
+# starts answering with captchas; 10 is the hard minimum.
+interval_seconds = 45
+jitter = 0.25
+# Random pause between requests inside one cycle, [min, max] seconds.
+request_delay_seconds = [1.0, 3.0]
+# Run the search queries every N cycles (1 = every cycle).
+search_every_cycles = 1
+# Maximum number of listings auto-watched from search results.
+max_discovered = 15
+# After an alert, ignore the same item going out of and back into stock for this long.
+realert_cooldown_minutes = 10
+# Also notify when an item you were alerted about sells out again.
+notify_when_sold_out = false
+# Warn (by e-mail/WhatsApp) if no check has succeeded for this many minutes,
+# e.g. because Amazon keeps showing captchas. 0 disables.
+health_alert_after_minutes = 30
+# Longest wait after repeated captchas.
+max_backoff_seconds = 900
+# Save pages the parser could not understand here (useful if Amazon changes its layout).
+debug_dump_dir = ""
+# Also log to this file (rotated at 5 MB).
+log_file = ""
+
+
+[filter]
+# Applied to search results (ASINs listed above are always watched).
+# A title must contain at least one term from EVERY group...
+require_any = [
+    ["playstation", "psn", "ps5", "ps4", "ps store", "playstation network", "playstation store"],
+    ["gift card", "giftcard", "wallet", "top up", "topup", "voucher", "cash card", "network card", "psn card"],
+]
+# ...and none of these (whole words, case-insensitive). Keeps out other
+# currencies/regions, other platforms and accessories.
+exclude = [
+    "$", "usd", "usa", "us account", "us store", "us region", "united states",
+    "uae", "aed", "saudi", "ksa", "sar", "gbp", "£", "uk account", "€", "eur", "euro",
+    "japan", "jpy", "hong kong", "hkd", "indonesia", "turkey", "brazil",
+    "xbox", "steam", "nintendo", "google play", "itunes", "apple",
+    "controller", "console", "headset", "skin", "sticker", "charging", "cover",
+]
+# Ignore offers priced more than this % above the face value printed in the
+# title (e.g. a ₹1000 card sold by a reseller for ₹1,500). -1 disables.
+max_markup_percent = 10
+# Ignore offers above this absolute price in ₹. 0 disables.
+max_price = 0
+
+
+[email]
+enabled = true
+# Gmail: create an App Password (Google Account > Security > 2-Step
+# Verification > App passwords) and use it as the password.
+smtp_host = "smtp.gmail.com"
+smtp_port = 465
+security = "ssl"            # "ssl" (port 465), "starttls" (port 587) or "none"
+username = "you@gmail.com"
+password = "${SCANAMZN_SMTP_PASSWORD}"
+from_addr = "you@gmail.com"
+to = ["you@gmail.com"]
+
+
+[whatsapp]
+enabled = true
+# "callmebot" (free, easiest), "twilio" or "meta" (WhatsApp Cloud API).
+provider = "callmebot"
+
+[whatsapp.callmebot]
+# Get your API key: save CallMeBot's number (shown on
+# https://www.callmebot.com/blog/free-api-whatsapp-messages/) in your
+# contacts and send it "I allow callmebot to send me messages" on WhatsApp.
+recipients = [
+    { phone = "+91XXXXXXXXXX", apikey = "${SCANAMZN_CALLMEBOT_APIKEY}" },
+]
+
+[whatsapp.twilio]
+account_sid = "${TWILIO_ACCOUNT_SID}"
+auth_token = "${TWILIO_AUTH_TOKEN}"
+from_number = "+14155238886"   # Twilio sandbox number, or your approved sender
+to = ["+91XXXXXXXXXX"]
+# Outside the 24h session window WhatsApp only delivers approved templates:
+# put a Content Template SID here; its variable {{1}} receives the alert text.
+content_sid = ""
+
+[whatsapp.meta]
+access_token = "${WHATSAPP_CLOUD_TOKEN}"
+phone_number_id = "000000000000000"
+to = ["91XXXXXXXXXX"]
+api_version = "v25.0"
+# Free-form text only reaches recipients who messaged your number in the last
+# 24h. Otherwise set an approved template; with template_body_param = true its
+# body variable {{1}} receives the alert text.
+template_name = ""
+template_language = "en_US"
+template_body_param = true

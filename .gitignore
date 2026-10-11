@@ -1,0 +1,16 @@
+# Local config holds addresses and phone numbers; secrets belong in env vars.
+config.toml
+.env
+*.env
+
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+
+debug_pages/
+*.log
