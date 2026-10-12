@@ -31,6 +31,16 @@ log = logging.getLogger(__name__)
 _ENV_REF = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 _ASIN = re.compile(r"^[A-Z0-9]{10}$")
 
+# PlayStation Store gift card listings on Amazon.in (Sony "Email Delivery"
+# digital codes), found in October 2026. Amazon hides out-of-stock items from
+# search results, so these are watched directly unless
+# [amazon] watch_known_listings = false.
+KNOWN_LISTINGS = {
+    "B07K6RYVHR": "Rs.1000 Sony PlayStation Store Gift Card",
+    "B07K6RYVJ5": "Rs.4000 Sony PlayStation Store Gift Card",
+    "B0CYNZJLBC": "Rs.9000 Sony PlayStation Store Gift Card",
+}
+
 DEFAULT_QUERIES = [
     "playstation gift card",
     "psn wallet top up card",
@@ -206,6 +216,8 @@ def from_dict(data: dict[str, Any]) -> Settings:
     for asin in s.asins:
         if not _ASIN.match(asin):
             raise ConfigError(f"amazon.asins: {asin!r} is not a 10-character ASIN")
+    if amazon.bool("watch_known_listings", True):
+        s.asins += list(KNOWN_LISTINGS)
     s.asins = list(dict.fromkeys(s.asins))
     s.search_queries = [q for q in amazon.list("search_queries", s.search_queries) if q.strip()]
     s.http_backend = amazon.str("http_backend", s.http_backend)
@@ -229,7 +241,8 @@ def from_dict(data: dict[str, Any]) -> Settings:
     s.notify_when_sold_out = mon.bool("notify_when_sold_out", s.notify_when_sold_out)
     s.health_alert_after_minutes = mon.float("health_alert_after_minutes", s.health_alert_after_minutes)
     s.max_backoff_seconds = mon.float("max_backoff_seconds", s.max_backoff_seconds)
-    s.debug_dump_dir = mon.str("debug_dump_dir", s.debug_dump_dir)
+    debug_dir = mon.str("debug_dump_dir", s.debug_dump_dir)
+    s.debug_dump_dir = str(Path(debug_dir).expanduser()) if debug_dir else ""
     s.log_file = mon.str("log_file", s.log_file)
     s.daily_status_hour = mon.int("daily_status_hour", s.daily_status_hour)
     if not -1 <= s.daily_status_hour <= 23:

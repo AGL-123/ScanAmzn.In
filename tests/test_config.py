@@ -8,7 +8,7 @@ from scanamzn.config import ConfigError, build_notifiers, from_dict, load
 def test_defaults():
     s = from_dict({})
     assert s.domain == "www.amazon.in"
-    assert s.search_queries and s.asins == []
+    assert s.search_queries and s.asins == ["B07K6RYVHR", "B07K6RYVJ5", "B0CYNZJLBC"]  # known listings
     assert s.interval_seconds == 45 and s.max_markup_percent == 10
     assert build_notifiers(s) == []
 
@@ -22,7 +22,7 @@ def test_example_config_parses(monkeypatch):
 
 
 def test_asins_validated_and_deduplicated():
-    s = from_dict({"amazon": {"asins": ["b0abcdefgh", "B0ABCDEFGH"]}})
+    s = from_dict({"amazon": {"asins": ["b0abcdefgh", "B0ABCDEFGH"], "watch_known_listings": False}})
     assert s.asins == ["B0ABCDEFGH"]
     with pytest.raises(ConfigError, match="ASIN"):
         from_dict({"amazon": {"asins": ["not-an-asin"]}})
@@ -34,7 +34,7 @@ def test_rejects_too_fast_polling_and_bad_types():
     with pytest.raises(ConfigError, match="wrong type"):
         from_dict({"monitor": {"interval_seconds": "fast"}})
     with pytest.raises(ConfigError, match="nothing to watch"):
-        from_dict({"amazon": {"search_queries": []}})
+        from_dict({"amazon": {"search_queries": [], "watch_known_listings": False}})
 
 
 def test_env_placeholders_only_resolved_when_used(monkeypatch):

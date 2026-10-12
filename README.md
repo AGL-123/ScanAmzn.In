@@ -210,6 +210,14 @@ against the live site:
 - a **positive control**: an everyday product that search shows with a price
   (`[amazon] control_queries`) must be read as in stock.
 
+The verdict is *pass*, *fail* (something was read wrongly; pages are saved), or
+*inconclusive* (a bot check or network error prevented the positive control),
+with exit codes 0, 1 and 3. A bot check is retried with a fresh session.
+
+Amazon hides out-of-stock items from search results, so the bot also watches
+the known Sony PlayStation Store gift card listings (`KNOWN_LISTINGS` in
+`scanamzn/config.py`) unless `[amazon] watch_known_listings = false`.
+
 The running monitor repeats the positive control every
 `monitor.selftest_every_hours` (default 6). It warns after two failures in a
 row, and reports the last result in the daily status message and in `status`.

@@ -228,7 +228,9 @@ def cmd_selftest(args: argparse.Namespace, s: Settings) -> int:
     from . import selftest
 
     folder = selftest.state_dir(s)
-    debug = Path(s.debug_dump_dir).expanduser() if s.debug_dump_dir else folder / "debug"
+    debug = selftest.debug_dir(s)
+    for old in debug.glob("selftest_*.html"):  # don't mix in pages from an earlier run
+        old.unlink(missing_ok=True)
     saved: list[Path] = []
 
     def dump(key: str, html: str) -> None:
@@ -240,20 +242,23 @@ def cmd_selftest(args: argparse.Namespace, s: Settings) -> int:
         except OSError as exc:
             log.warning("could not save %s: %s", path, exc)
 
+    def pause() -> bool:
+        time.sleep(rng.uniform(*s.request_delay_seconds))
+        return False
+
     rng = random.Random()
     fetcher = _fetcher(s)
     try:
         result = selftest.run(
-            s, fetcher,
-            pause=lambda: time.sleep(rng.uniform(*s.request_delay_seconds)),
-            dump=dump,
+            s, fetcher, pause=pause, dump=dump,
             progress=lambda text: print(text, flush=True),
+            wait=time.sleep,
         )
     finally:
         fetcher.close()
     text = result.summary()
     if saved:
-        text += f"\n\n{len(saved)} page(s) the bot could not read were saved. Run `ps5 export` to copy them to Downloads."
+        text += f"\n\nThe pages it read were saved; `ps5 export` copies them to Downloads ({len(saved)} files)."
     print("\n" + text)
     try:
         folder.mkdir(parents=True, exist_ok=True)
@@ -261,20 +266,22 @@ def cmd_selftest(args: argparse.Namespace, s: Settings) -> int:
     except OSError as exc:
         log.warning("could not save the report: %s", exc)
 
+    icon, word = {"pass": ("✅", "passed"), "fail": ("❌", "found a problem"),
+                  "inconclusive": ("⚠️", "was not conclusive")}[result.verdict]
     if args.send:
         notifiers = build_notifiers(s)
         if notifiers:
             dispatcher = Dispatcher(notifiers, retries=1)
             try:
                 dispatcher.send_and_wait(Message(
-                    subject=("✅" if result.passed else "⚠️") + " PS5 monitor self-test",
+                    subject=f"{icon} PS5 monitor self-test {word}",
                     body=text,
-                    summary="PS5 monitor self-test " + ("passed" if result.passed else "found problems"),
+                    summary=f"PS5 monitor self-test {word}",
                     kind=INFO,
                 ))
             finally:
                 dispatcher.close()
-    return 0 if result.passed else 1
+    return {"pass": 0, "fail": 1, "inconclusive": 3}[result.verdict]
 
 
 def cmd_status(args: argparse.Namespace, s: Settings) -> int:

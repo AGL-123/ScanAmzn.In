@@ -5,7 +5,12 @@ never proves that the bot would recognise an *in-stock* page. The positive
 control below does: it takes an everyday product that the search shows with a
 price (so it is surely buyable) and checks that its product page is read as
 in stock. The monitor repeats this every few hours; `scanamzn selftest` runs
-it together with the other checks and prints a verdict.
+it together with the other checks and gives a verdict:
+
+* pass - every check passed (warnings may be listed), including the control;
+* fail - something was read wrongly (pages are saved for analysis);
+* inconclusive - Amazon blocked or the network failed before the in-stock
+  control could be completed, so nothing is proven either way.
 """
 
 from __future__ import annotations
@@ -14,13 +19,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from .fetcher import FetchError, Fetcher
-from .models import DEFINITIVE, Product, Status
+from .fetcher import FetchError, Fetcher, Page
+from .models import Product, Status
 from .parser import delivery_location, is_blocked, parse_product, parse_search
 
 CONTROL_QUERIES = ("usb c cable", "a4 notebook", "ballpoint pen")
+CONTROL_CHECK = "In-stock detection"
+BLOCK_RETRY_WAIT = 60  # seconds before retrying with a fresh session
 
-Pause = Callable[[], None]
+# pause() sleeps between requests and returns True when the caller wants to stop.
+Pause = Callable[[], bool]
 Dump = Callable[[str, str], None]
 
 
@@ -37,7 +45,7 @@ def _short(text: str, limit: int = 60) -> str:
 @dataclass
 class ControlResult:
     # True: an in-stock product was recognised; False: it wasn't;
-    # None: inconclusive (captcha, no internet).
+    # None: inconclusive (captcha, network/server error, stopped).
     ok: bool | None
     detail: str
     product: Product | None = None
@@ -47,28 +55,32 @@ def in_stock_control(
     fetcher: Fetcher, queries: tuple[str, ...] | list[str], pause: Pause, dump: Dump | None = None
 ) -> ControlResult:
     """Find a product the search shows with a price and expect its page to read as in stock."""
-    tried: list[Product] = []
+    misread: list[Product] = []
     for query in queries:
-        pause()
+        if pause():
+            return ControlResult(None, "stopped")
         try:
             page = fetcher.get(fetcher.search_url(query))
         except FetchError as exc:
             return ControlResult(None, f"search failed: {exc}")
         result = parse_search(page.text, page.status_code)
         if result.blocked:
-            return ControlResult(None, "Amazon showed a captcha")
+            return ControlResult(None, "Amazon asked for a bot check")
         candidates = [p for p in result.products if p.status is Status.AVAILABLE and p.price][:2]
         if not candidates and dump:
             dump(f"control_search_{query}", page.text)
         for candidate in candidates:
-            pause()
+            if pause():
+                return ControlResult(None, "stopped")
             try:
                 product_page = fetcher.get(fetcher.product_url(candidate.asin))
             except FetchError as exc:
                 return ControlResult(None, f"product page failed: {exc}")
             product = parse_product(product_page.text, candidate.asin, product_page.status_code)
             if product.status is Status.BLOCKED:
-                return ControlResult(None, "Amazon showed a captcha")
+                return ControlResult(None, "Amazon asked for a bot check")
+            if product.status is Status.ERROR:  # Amazon's server hiccup, not a misread
+                return ControlResult(None, f"product page failed: {product.reason}")
             if product.status is Status.AVAILABLE:
                 return ControlResult(
                     True,
@@ -76,20 +88,45 @@ def in_stock_control(
                     f"{_inr(product.price or candidate.price)} ({product.reason})",
                     product,
                 )
-            tried.append(product)
+            misread.append(product)
             if dump:
                 dump(f"control_{candidate.asin}", product_page.text)
-        if tried:
+        if misread:
             break  # pages were found but misread; another query won't change that
-    if not tried:
+    if not misread:
         return ControlResult(False, "no product with a price was recognised in the search results")
-    last = tried[-1]
+    last = misread[-1]
     return ControlResult(
         False,
-        f"{len(tried)} product(s) that search showed with a price were read as "
+        f"{len(misread)} product(s) that search showed with a price were read as "
         f"'{last.status}' on their own page ({last.reason})",
         last,
     )
+
+
+class RetryingFetcher:
+    """Wraps a Fetcher: when Amazon answers with a bot check, wait, start a fresh
+    session and try again (a limited number of times for the whole test)."""
+
+    def __init__(self, fetcher: Fetcher, wait: Callable[[float], None], progress: Callable[[str], None],
+                 retries: int = 2):
+        self.fetcher, self.wait, self.progress, self.retries = fetcher, wait, progress, retries
+        self.backend = fetcher.backend
+        self.product_url, self.search_url = fetcher.product_url, fetcher.search_url
+        self.blocks = 0
+
+    def get(self, url: str) -> Page:
+        while True:
+            page = self.fetcher.get(url)
+            if not is_blocked(page.text, page.status_code):
+                return page
+            self.blocks += 1
+            if self.retries <= 0:
+                return page
+            self.retries -= 1
+            self.progress(f"Amazon asked for a bot check; trying again with a fresh session in {BLOCK_RETRY_WAIT} s...")
+            self.wait(BLOCK_RETRY_WAIT)
+            self.fetcher.reset()
 
 
 @dataclass
@@ -109,110 +146,175 @@ class SelfTest:
     checks: list[Check] = field(default_factory=list)
 
     @property
+    def verdict(self) -> str:
+        if any(c.ok is False for c in self.checks):
+            return "fail"
+        control = next((c for c in self.checks if c.name == CONTROL_CHECK), None)
+        if control is None or control.ok is not True:
+            return "inconclusive"
+        return "pass"
+
+    @property
     def passed(self) -> bool:
-        return all(c.ok is not False for c in self.checks) and any(c.ok for c in self.checks)
+        return self.verdict == "pass"
 
     def summary(self) -> str:
         lines = ["PS5 gift card monitor - self-test"]
         for c in self.checks:
             lines.append(f"{c.icon} {c.name}: {c.detail}")
             lines.extend(f"     {line}" for line in c.lines)
-        if self.passed:
-            lines.append("\nRESULT: the bot reads Amazon.in correctly and would see a restock.")
+        lines.append("")
+        if self.verdict == "fail":
+            lines.append("RESULT: ❌ something is read wrongly - see the ❌ lines. "
+                         "Run `ps5 export` and send the files so it can be fixed.")
+        elif self.verdict == "inconclusive":
+            lines.append("RESULT: ⚠️ not conclusive - Amazon blocked part of the test or the connection failed. "
+                         "Try PS5 Check now again in a few minutes.")
+        elif any(c.ok is None for c in self.checks):
+            lines.append("RESULT: ✅ in-stock detection works on the live site; see the ⚠️ lines for details.")
         else:
-            lines.append("\nRESULT: something is not right - see the ❌ / ⚠️ lines above.")
+            lines.append("RESULT: ✅ the bot reads Amazon.in correctly and would see a restock.")
         return "\n".join(lines)
 
 
-def run(settings, fetcher: Fetcher, pause: Pause, dump: Dump, progress: Callable[[str], None]) -> SelfTest:
-    """All checks, in order; stops early when Amazon can't be reached at all."""
+def run(settings, fetcher: Fetcher, pause: Pause, dump: Dump, progress: Callable[[str], None],
+        wait: Callable[[float], None] | None = None) -> SelfTest:
+    """All checks in order. Search and gift card pages are always saved via
+    ``dump`` (they are what's needed to fix page reading); control pages only
+    when misread."""
     test = SelfTest()
+    site = RetryingFetcher(fetcher, wait or (lambda s: None), progress)
 
     progress("Checking that Amazon.in can be reached...")
     try:
-        home = fetcher.get(f"https://{settings.domain}/")
+        home = site.get(f"https://{settings.domain}/")
     except FetchError as exc:
-        test.checks.append(Check("Amazon.in reachable", False, f"no connection ({exc})"))
+        # No internet proves nothing about page reading: not conclusive.
+        test.checks.append(Check("Amazon.in reachable", None, f"no connection - is the internet on? ({exc})"))
         return test
     if is_blocked(home.text, home.status_code):
-        test.checks.append(Check("Amazon.in reachable", False, "Amazon answered with a captcha; try again later"))
+        dump("blocked_home", home.text)
+        test.checks.append(Check(
+            "Amazon.in reachable", None,
+            f"Amazon keeps asking for a bot check (HTTP {home.status_code}); the monitor waits and retries "
+            "by itself. If this happens often, try `ps5 boost`.",
+        ))
         return test
     where = delivery_location(home.text) or "not shown"
     test.checks.append(Check(
         "Amazon.in reachable", True,
-        f"HTTP {home.status_code} via {fetcher.backend}; Amazon's delivery location: {where}",
+        f"via {fetcher.backend}; Amazon's delivery location: {where}"
+        + (f" (needed {site.blocks} retry after a bot check)" if site.blocks else ""),
     ))
 
     progress("Running the gift card searches...")
     found: dict[str, Product] = {}
-    results = recognised_pages = 0
+    results, others = 0, []
+    misunderstood, blocked_searches, failed_searches = [], [], []
     for query in settings.search_queries:
-        pause()
+        if pause():
+            break
         try:
-            page = fetcher.get(fetcher.search_url(query))
+            page = site.get(fetcher.search_url(query))
         except FetchError as exc:
-            test.checks.append(Check("Searches", False, f"'{query}' failed: {exc}"))
-            return test
+            failed_searches.append(f"'{query}': {exc}")
+            continue
+        dump(f"search_{query}", page.text)
         parsed = parse_search(page.text, page.status_code)
         if parsed.blocked:
-            test.checks.append(Check("Searches", False, "Amazon answered with a captcha; try again later"))
-            return test
+            blocked_searches.append(query)
+            continue
         if not parsed.layout_ok:
-            dump(f"search_{query}", page.text)
-        recognised_pages += parsed.layout_ok
+            misunderstood.append(query)
+            continue
         results += len(parsed.products)
         for p in parsed.products:
             if settings.title_filter.matches(p.title):
                 found.setdefault(p.asin, p)
-    listing_lines = [f"{p.asin}  {p.status:<11} {_inr(p.price):>9}  {_short(p.title)}" for p in found.values()]
+            else:
+                others.append(p.title)
+    lines = [f"{p.asin}  {p.status:<11} {_inr(p.price):>9}  {_short(p.title)}" for p in found.values()]
+    lines += [f"not understood: '{q}' (saved)" for q in misunderstood]
+    lines += [f"bot check: '{q}'" for q in blocked_searches] + [f"failed: {f}" for f in failed_searches]
     if not settings.search_queries:
         test.checks.append(Check("Searches", None, "no search queries configured"))
-    elif not recognised_pages or not results:
-        test.checks.append(Check("Searches", False, "the search pages were not understood (saved for analysis)"))
+    elif misunderstood and not results:
+        test.checks.append(Check("Searches", False, "the search pages were not understood (saved)", lines))
+    elif misunderstood:
+        test.checks.append(Check(
+            "Searches", None, f"{len(misunderstood)} of {len(settings.search_queries)} searches not understood",
+            lines,
+        ))
+    elif not results and (blocked_searches or failed_searches):
+        test.checks.append(Check("Searches", None, "could not run the searches (bot check / network)", lines))
     elif not found:
+        sample = "; ".join(_short(t, 40) for t in others[:3])
         test.checks.append(Check(
             "Searches", None,
-            f"{results} results, but none look like an Indian-rupee PlayStation gift card right now",
+            f"{results} results, none look like a PlayStation gift card right now"
+            " (Amazon hides out-of-stock items from search)"
+            + (f" - e.g. {sample}" if sample else ""),
+            lines,
         ))
     else:
         test.checks.append(Check(
-            "Searches", True, f"{results} results, {len(found)} PlayStation gift card listing(s):", listing_lines,
+            "Searches", None if blocked_searches or failed_searches else True,
+            f"{results} results, {len(found)} PlayStation gift card listing(s):", lines,
         ))
 
     progress("Opening the gift card pages...")
-    asins = list(dict.fromkeys(settings.asins + list(found)))[:4]
-    page_lines, unreadable, in_stock = [], 0, []
+    asins = list(dict.fromkeys(settings.asins + list(found)))[:6]
+    page_lines, unreadable, inconclusive, mismatched, in_stock = [], 0, 0, 0, []
     for asin in asins:
-        pause()
+        if pause():
+            break
         try:
-            page = fetcher.get(fetcher.product_url(asin))
+            page = site.get(fetcher.product_url(asin))
         except FetchError as exc:
-            page_lines.append(f"{asin}  error: {exc}")
-            unreadable += 1
+            page_lines.append(f"{asin}  could not load: {exc}")
+            inconclusive += 1
             continue
+        dump(f"product_{asin}", page.text)
         product = parse_product(page.text, asin, page.status_code)
-        if product.status is Status.BLOCKED:
-            page_lines.append(f"{asin}  captcha")
+        listed = found.get(asin)
+        if product.status in (Status.BLOCKED, Status.ERROR):
+            page_lines.append(f"{asin}  {'bot check' if product.status is Status.BLOCKED else product.reason}")
+            inconclusive += 1
             continue
-        if product.status not in DEFINITIVE | {Status.NOT_FOUND}:
+        if product.status is Status.UNKNOWN:
             unreadable += 1
-            dump(f"product_{asin}", page.text)
+            page_lines.append(f"{asin}  NOT UNDERSTOOD (saved): {_short(product.title, 45)}")
+            continue
         if product.status is Status.AVAILABLE:
             in_stock.append(asin)
-        page_lines.append(f"{asin}  {product.status}: {product.reason[:70]}")
+        if (listed and listed.status is Status.AVAILABLE and listed.price
+                and product.status is Status.UNAVAILABLE):
+            mismatched += 1
+            page_lines.append(
+                f"{asin}  search shows it in stock at {_inr(listed.price)}, but its page reads unavailable (saved)"
+            )
+            continue
+        page_lines.append(f"{asin}  {product.status}: {_short(product.title or (listed and listed.title) or '', 45)}")
     if not asins:
         test.checks.append(Check("Gift card pages", None, "no listings to open (none found, no ASINs set)"))
     elif unreadable:
         test.checks.append(Check(
-            "Gift card pages", False, f"{unreadable} of {len(asins)} page(s) not understood (saved)", page_lines,
+            "Gift card pages", False, f"{unreadable} of {len(asins)} page(s) not understood", page_lines,
+        ))
+    elif inconclusive or mismatched:
+        test.checks.append(Check(
+            "Gift card pages", None,
+            f"{len(asins) - inconclusive - mismatched} of {len(asins)} page(s) understood; "
+            f"{inconclusive} could not be loaded, {mismatched} disagree with the search",
+            page_lines,
         ))
     else:
         note = f" - {len(in_stock)} IN STOCK NOW!" if in_stock else ""
         test.checks.append(Check("Gift card pages", True, f"{len(asins)} page(s) understood{note}", page_lines))
 
     progress("Checking that an in-stock product is recognised...")
-    control = in_stock_control(fetcher, settings.control_queries, pause, dump)
-    test.checks.append(Check("In-stock detection", control.ok, control.detail))
+    control = in_stock_control(site, settings.control_queries, pause, dump)
+    test.checks.append(Check(CONTROL_CHECK, control.ok, control.detail))
     return test
 
 
@@ -221,3 +323,8 @@ def state_dir(settings) -> Path:
     if settings.status_file:
         return Path(settings.status_file).expanduser().parent
     return Path.home() / ".scanamzn"
+
+
+def debug_dir(settings) -> Path:
+    """Folder for pages the bot couldn't read (what `ps5 export` copies)."""
+    return Path(settings.debug_dump_dir) if settings.debug_dump_dir else state_dir(settings) / "debug"

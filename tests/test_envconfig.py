@@ -33,7 +33,7 @@ def test_empty_values_are_ignored(tmp_path):
     cfg.write_text("")
     env = {name: "" for name in ALL_NAMES} | {"SCANAMZN_ASINS": "b0abcdefgh, B0ABCDEFGJ"}
     s = load(cfg, environ=env)
-    assert s.asins == ["B0ABCDEFGH", "B0ABCDEFGJ"]
+    assert s.asins[:2] == ["B0ABCDEFGH", "B0ABCDEFGJ"]
     assert build_notifiers(s) == []
 
 
@@ -41,7 +41,7 @@ def test_env_overrides_file(tmp_path):
     cfg = tmp_path / "config.toml"
     cfg.write_text('[amazon]\nasins = ["B0AAAAAAAA"]\n[monitor]\ninterval_seconds = 90\n')
     s = load(cfg, environ={"SCANAMZN_INTERVAL_SECONDS": "60", "SCANAMZN_DAILY_STATUS_HOUR": "9"})
-    assert s.asins == ["B0AAAAAAAA"]
+    assert s.asins[0] == "B0AAAAAAAA"
     assert s.interval_seconds == 60 and s.daily_status_hour == 9
 
 

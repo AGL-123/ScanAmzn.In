@@ -1,7 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # Control the PS5 gift card monitor on an Android phone (Termux).
 #
-#   ps5 start | stop | restart | status | test | check | setup | log | update | export
+#   ps5 start | stop | restart | status | test | check | setup | log | update | export | boost
 #
 # The home-screen buttons call these same commands.
 
@@ -165,9 +165,45 @@ export_files() {
   for f in "$STATE_DIR"/debug/*.html; do
     [ -f "$f" ] || continue
     # .txt: chat apps accept text files more readily than .html
-    cp "$f" "$dest/$(basename "$f" .html).txt" && n=$((n + 1))
+    cp -p "$f" "$dest/$(basename "$f" .html).txt" && n=$((n + 1))
   done
   echo "Copied $n file(s) to Downloads/ScanAmzn - attach them where you were asked to."
+}
+
+boost() {
+  # Optional: a Chrome-like network fingerprint (curl_cffi), which Amazon
+  # challenges far less than Python's default. Needs a compiler on the phone.
+  echo "Installing the browser-like network library (curl_cffi)."
+  echo "This downloads build tools (about 200 MB) and can take 5-10 minutes - use Wi-Fi."
+  pkg install -y clang make pkg-config libffi </dev/null || { echo "Could not install the build tools."; return 1; }
+  if ! python -m pip install -q --pre curl_cffi; then
+    echo "curl_cffi could not be installed on this phone; the bot keeps working in its normal mode."
+    return 1
+  fi
+  # Prove it works here before the bot starts relying on it.
+  if python - <<'PY'
+import sys
+
+try:
+    from curl_cffi import requests
+except Exception as exc:  # e.g. a library that doesn't load on this Android version
+    sys.exit(f"curl_cffi does not load on this phone ({type(exc).__name__}).")
+try:
+    response = requests.get("https://www.amazon.in/", impersonate="chrome", timeout=30)
+except Exception as exc:
+    sys.exit(f"Test request to Amazon.in failed ({type(exc).__name__}) - is the internet on?")
+print("Test request to Amazon.in: HTTP", response.status_code)
+if response.status_code >= 500:
+    sys.exit("Amazon.in answered with a server error.")
+PY
+  then
+    say "Boost installed: the bot now looks like Chrome to Amazon."
+    if is_running; then stop; start; fi
+  else
+    echo "Removing curl_cffi again; the bot keeps working in its normal mode. You can try ps5 boost later."
+    python -m pip uninstall -y curl_cffi >/dev/null 2>&1
+    return 1
+  fi
 }
 
 install_shortcuts() {
@@ -222,6 +258,7 @@ case "${1:-status}" in
   test) need_config; ensure_packages; python -m scanamzn -c "$CONFIG" test-notify ;;
   check) need_config; ensure_packages; python -m scanamzn -c "$CONFIG" selftest --send ;;
   export) export_files ;;
+  boost) take_lock; boost ;;
   setup)
     take_lock
     ensure_packages
@@ -233,7 +270,7 @@ case "${1:-status}" in
   _after-update) take_lock; after_update "${2:-0}" ;;
   install-shortcuts) install_shortcuts ;;
   *)
-    echo "usage: ps5 start|stop|restart|status|test|check|setup|log|update|export"
+    echo "usage: ps5 start|stop|restart|status|test|check|setup|log|update|export|boost"
     exit 2
     ;;
 esac

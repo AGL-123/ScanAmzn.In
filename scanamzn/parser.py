@@ -138,7 +138,8 @@ def _price_of(el: Tag) -> float | None:
 
 def is_blocked(html: str, status_code: int = 200) -> bool:
     """True for captcha / robot-check / throttling responses."""
-    if status_code in (429, 503):
+    # 202 is Amazon's (AWS WAF) JavaScript bot challenge; real pages are 200.
+    if status_code in (202, 429, 503):
         return True
     if any(marker in html for marker in _REAL_PAGE_MARKERS):
         return False

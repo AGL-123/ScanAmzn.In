@@ -191,7 +191,11 @@ class Monitor:
                 report.blocked = True
                 return report
 
-        if self.s.search_queries and (self.cycle - 1) % self.s.search_every_cycles == 0:
+        # Search every round when no product pages are watched (searches are
+        # then the only way to see a restock), else every search_every_cycles.
+        if self.s.search_queries and (
+            not self.watch_list() or (self.cycle - 1) % self.s.search_every_cycles == 0
+        ):
             for query in self.s.search_queries:
                 if self._stop.is_set():
                     return report
@@ -593,11 +597,14 @@ class Monitor:
             log.warning("could not write status file %s: %s", path, exc)
 
     def _dump(self, key: str, html: str) -> None:
-        if not self.s.debug_dump_dir or key in self._dumped:
+        """Save a page the bot couldn't read (once per run), for `ps5 export`."""
+        if key in self._dumped:
             return
         self._dumped.add(key)
+        from .selftest import debug_dir  # local import: selftest imports this module's helpers
+
         safe = "".join(c if c.isalnum() else "_" for c in key)[:60]
-        path = Path(self.s.debug_dump_dir) / f"{self.wall():%Y%m%d_%H%M%S}_{safe}.html"
+        path = debug_dir(self.s) / f"{self.wall():%Y%m%d_%H%M%S}_{safe}.html"
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(html, encoding="utf-8")

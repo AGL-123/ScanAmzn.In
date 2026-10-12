@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import random
+import time
 from dataclasses import dataclass
 from urllib.parse import quote_plus
 
@@ -74,6 +75,7 @@ class Fetcher:
         self.backend = backend
         self._rotation = 0
         self._session = None
+        self.sleep = time.sleep
         log.debug("HTTP backend: %s", backend)
 
     # -- URLs ---------------------------------------------------------------
@@ -110,6 +112,9 @@ class Fetcher:
             session.get(f"https://{self.domain}/", timeout=self.timeout)
         except Exception as exc:  # noqa: BLE001 - warm-up is best effort
             log.debug("warm-up request failed: %s", exc)
+        # A person looks at the home page for a moment before searching; an
+        # instant second request is a classic bot signature.
+        self.sleep(random.uniform(2.0, 4.0))
         return session
 
     def reset(self) -> None:

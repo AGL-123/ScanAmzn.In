@@ -7,7 +7,7 @@ from scanamzn.selftest import in_stock_control
 from .conftest import fixture, make_settings, product_html
 
 HOME = '<html><body><span id="glow-ingress-line2">Israel</span></body></html>'
-NO_PAUSE = lambda: None  # noqa: E731
+NO_PAUSE = lambda: False  # noqa: E731
 
 
 def control_fetcher(fetcher, first="available", second="available"):
@@ -78,14 +78,16 @@ def test_full_selftest_reports_unreadable_gift_card_page(fetcher):
     test = selftest.run(s, fetcher, NO_PAUSE, lambda k, h: dumped.append(k), lambda m: None)
     assert test.checks[2].ok is False and not test.passed
     assert "product_B0PSN02000" in dumped
-    assert "something is not right" in test.summary()
+    assert test.verdict == "fail" and "read wrongly" in test.summary()
 
 
 def test_full_selftest_stops_on_captcha(fetcher):
     fetcher.pages["https://www.amazon.in/"] = (200, fixture("captcha.html"))
     s = make_settings(amazon={"search_queries": ["psn"]})
     test = selftest.run(s, fetcher, NO_PAUSE, lambda k, h: None, lambda m: None)
-    assert len(test.checks) == 1 and test.checks[0].ok is False and not test.passed
+    # A bot check is not a reading failure: the verdict is "not conclusive".
+    assert len(test.checks) == 1 and test.checks[0].ok is None
+    assert test.verdict == "inconclusive" and "not conclusive" in test.summary()
 
 
 def test_monitor_runs_control_and_warns_after_two_failures(fetcher, dispatcher, clock):
@@ -148,3 +150,153 @@ def cli_env(monkeypatch, tmp_path):
     monkeypatch.setenv("SCANAMZN_SMTP_USER", "someone@gmail.com")
     monkeypatch.setenv("SCANAMZN_SMTP_PASSWORD", "pw")
     monkeypatch.setenv("SCANAMZN_TIMEZONE", "Asia/Jerusalem")
+
+
+# --- review findings -------------------------------------------------------------------
+
+
+def _settings(**amazon):
+    return make_settings(amazon={"search_queries": ["playstation gift card"], **amazon})
+
+
+def test_blocked_control_makes_the_verdict_inconclusive(fetcher):
+    fetcher = full_site(fetcher)
+    for q in selftest.CONTROL_QUERIES:
+        fetcher.set_search(q, fixture("captcha.html"))
+    test = selftest.run(_settings(), fetcher, NO_PAUSE, lambda k, h: None, lambda m: None)
+    assert test.checks[-1].ok is None and test.verdict == "inconclusive" and not test.passed
+
+
+def test_captcha_gift_card_pages_are_not_counted_as_understood(fetcher):
+    fetcher = full_site(fetcher)
+    fetcher.set_product("B0PSN02000", fixture("captcha.html"))
+    test = selftest.run(_settings(), fetcher, NO_PAUSE, lambda k, h: None, lambda m: None)
+    pages = test.checks[2]
+    assert pages.ok is None and "could not be loaded" in pages.detail
+    assert any("bot check" in line for line in pages.lines)
+
+
+def test_search_and_page_disagreeing_is_flagged(fetcher):
+    fetcher = full_site(fetcher)
+    fetcher.set_product("B0PSN01000", fixture("product_unavailable.html"))  # search shows ₹1,000
+    dumped = []
+    test = selftest.run(_settings(), fetcher, NO_PAUSE, lambda k, h: dumped.append(k), lambda m: None)
+    pages = test.checks[2]
+    assert pages.ok is None and "disagree with the search" in pages.detail
+    assert "product_B0PSN01000" in dumped
+
+
+def test_partly_misunderstood_searches_are_flagged(fetcher):
+    fetcher = full_site(fetcher)
+    fetcher.set_search("psn wallet", "<html><body>new layout</body></html>")
+    s = make_settings(amazon={"search_queries": ["playstation gift card", "psn wallet"]})
+    test = selftest.run(s, fetcher, NO_PAUSE, lambda k, h: None, lambda m: None)
+    assert test.checks[1].ok is None and "1 of 2 searches not understood" in test.checks[1].detail
+
+
+def test_network_error_on_gift_card_page_is_not_a_reading_failure(fetcher):
+    fetcher = full_site(fetcher)
+    fetcher.fail.add(fetcher.product_url("B0PSN02000"))
+    test = selftest.run(_settings(), fetcher, NO_PAUSE, lambda k, h: None, lambda m: None)
+    assert test.checks[2].ok is None and test.verdict == "pass"
+
+
+def test_control_server_error_is_inconclusive(fetcher):
+    fetcher = control_fetcher(fetcher)
+    fetcher.set_product("B0PSN01000", "<html>Sorry! Something went wrong</html>", status=500)
+    result = in_stock_control(fetcher, selftest.CONTROL_QUERIES, NO_PAUSE)
+    assert result.ok is None and "failed" in result.detail
+
+
+def test_control_stops_when_asked(fetcher):
+    fetcher = control_fetcher(fetcher)
+    result = in_stock_control(fetcher, selftest.CONTROL_QUERIES, lambda: True)
+    assert result.ok is None and result.detail == "stopped" and fetcher.requests == []
+
+
+def test_bot_check_is_retried_with_a_fresh_session(fetcher):
+    fetcher = full_site(fetcher)
+    real_get, calls = fetcher.get, []
+
+    def flaky_get(url):  # the first request of the test gets Amazon's HTTP 202 challenge
+        calls.append(url)
+        if len(calls) == 1:
+            from scanamzn.fetcher import Page
+
+            return Page(url, 202, "<html><script src='challenge.js'></script></html>")
+        return real_get(url)
+
+    fetcher.get = flaky_get
+    waits, progress = [], []
+    test = selftest.run(_settings(), fetcher, NO_PAUSE, lambda k, h: None, progress.append, wait=waits.append)
+    assert waits == [selftest.BLOCK_RETRY_WAIT] and fetcher.resets == 1
+    assert test.checks[0].ok is True and "retry" in test.checks[0].detail
+    assert any("fresh session" in p for p in progress)
+
+
+def test_http_202_is_a_bot_check():
+    from scanamzn.parser import is_blocked, parse_product
+
+    assert is_blocked("<html><script src='challenge.js'></script></html>", 202)
+    assert parse_product("<html></html>", "B0X", 202).status.value == "blocked"
+
+
+def test_monitor_dumps_to_the_default_folder_with_home_expanded(fetcher, dispatcher, clock, tmp_path, monkeypatch):
+    from scanamzn.config import from_dict
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    quiet = {"selftest_every_hours": 0, "request_delay_seconds": [0, 0]}
+    amazon = {"asins": ["B0PSN02000"], "watch_known_listings": False, "search_queries": []}
+    s = from_dict({"amazon": amazon, "monitor": {"debug_dump_dir": "~/.scanamzn/debug", **quiet}})
+    assert s.debug_dump_dir == str(tmp_path / ".scanamzn" / "debug")
+    fetcher.set_product("B0PSN02000", '<span id="productTitle">x</span><div>redesigned</div>')
+    Monitor(s, fetcher, dispatcher, clock=clock).run_cycle()
+    assert len(list((tmp_path / ".scanamzn" / "debug").glob("*.html"))) == 1
+
+    # Without the setting, pages go next to the status file (where `ps5 export` looks).
+    s2 = from_dict({"amazon": amazon, "monitor": {"status_file": str(tmp_path / "state" / "status.json"), **quiet}})
+    Monitor(s2, fetcher, dispatcher, clock=clock).run_cycle()
+    assert len(list((tmp_path / "state" / "debug").glob("*.html"))) == 1
+
+
+def test_monitor_searches_every_round_when_nothing_is_watched(fetcher, dispatcher, clock):
+    s = make_settings(amazon={"search_queries": ["psn"]}, monitor={"search_every_cycles": 3})
+    m = Monitor(s, fetcher, dispatcher, clock=clock)
+    fetcher.set_search("psn", '<html><body>No results for "psn".</body></html>')
+    for _ in range(3):
+        m.run_cycle()
+    assert fetcher.requests.count(fetcher.search_url("psn")) == 3
+
+
+def test_known_listings_are_watched_by_default():
+    from scanamzn.config import KNOWN_LISTINGS, from_dict
+
+    assert from_dict({}).asins == list(KNOWN_LISTINGS)
+    assert from_dict({"amazon": {"watch_known_listings": False}}).asins == []
+
+
+def test_selftest_command_clears_old_pages_and_reports_inconclusive(cli_env, monkeypatch, tmp_path, capsys):
+    from .conftest import FakeFetcher
+
+    state = tmp_path / "state"
+    monkeypatch.setenv("SCANAMZN_STATUS_FILE", str(state / "status.json"))
+    monkeypatch.setenv("SCANAMZN_SEARCH_QUERIES", "playstation gift card")
+    (state / "debug").mkdir(parents=True)
+    (state / "debug" / "selftest_product_OLD.html").write_text("old")
+    fake = full_site(FakeFetcher())
+    for q in selftest.CONTROL_QUERIES:
+        fake.set_search(q, fixture("captcha.html"))
+    monkeypatch.setattr(cli, "_fetcher", lambda s: fake)
+    monkeypatch.setattr(cli.time, "sleep", lambda t: None)
+    sent = []
+
+    class Capture:
+        name, rationed = "telegram", False
+
+        def send(self, message):
+            sent.append(message)
+
+    monkeypatch.setattr(cli, "build_notifiers", lambda s: [Capture()])
+    assert cli.main(["selftest", "--send"]) == 3
+    assert not (state / "debug" / "selftest_product_OLD.html").exists()
+    assert sent[0].subject.startswith("⚠️") and "not conclusive" in sent[0].body

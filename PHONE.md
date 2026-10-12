@@ -240,19 +240,26 @@ stock**.
 1. that Amazon.in can be reached without a captcha, and where Amazon thinks
    you are (*delivery location*);
 2. that the searches return results and which PlayStation gift card listings
-   they found;
+   they found (Amazon hides out-of-stock items from search, so finding none is
+   normal; that's why the bot also watches the known Sony PlayStation Store
+   gift card listings, Rs.1000 / 4000 / 9000, directly);
 3. that those gift card pages are understood (*unavailable* / *in stock*);
 4. that an in-stock product is read as **in stock** with its price.
 
-A good result ends with *"RESULT: the bot reads Amazon.in correctly and would
-see a restock"*, with ✅ on every line. The same report arrives in Telegram
-(and e-mail). Copy it from there if you want to share it.
+If Amazon asks for a bot check in the middle, it waits a minute and retries with
+a fresh session (up to twice), so a check can take 2-3 minutes. It ends with one
+of three results, also sent to Telegram (and e-mail):
+
+* **✅ … would see a restock**: all good (⚠️ lines, if any, are details).
+* **⚠️ not conclusive**: Amazon blocked part of the test or the connection
+  failed, so nothing was proven either way. Try again in a few minutes.
+* **❌ something is read wrongly**: send the files (below) so it can be fixed.
 
 While running, the bot repeats check 4 every 6 hours. The daily *still
 running* message and **PS5 Status** show when it last passed, and you're
 warned if it fails twice in a row.
 
-**If something shows ❌:**
+**If the result is ❌ (or you're asked for the files):**
 
 1. Type `ps5 export` in Termux and allow storage access when asked. It copies
    the report, the pages the bot couldn't read and the recent log into your
@@ -289,10 +296,15 @@ phone on the charger if you can.
 * **PS5 Status says NOT RUNNING**: tap **PS5 Start**. If it keeps stopping by
   itself, Android is killing Termux. Redo Step 5. When Android kills Termux,
   it does not restart by itself until you open it.
-* **"Amazon is showing a captcha" in the status**: the bot waits and retries
-  by itself. If it lasts for hours, choose a longer interval in **PS5 Settings**.
-  Captchas apply to your whole internet connection, so you may briefly see them
-  too when you browse Amazon on the same Wi-Fi.
+* **"Amazon is showing a captcha" / "bot check" in the status or log**: the bot
+  waits and retries by itself, and a block right after starting is common. If
+  it happens a lot, type `ps5 boost` (Wi-Fi recommended, 5-10 minutes). It
+  installs a network library that looks like the Chrome browser to Amazon,
+  which Amazon challenges far less. It tests itself and removes itself again if
+  it doesn't work on your phone. **PS5 Check now** then shows *via curl_cffi*
+  instead of *via requests*. You can also choose a longer interval in **PS5
+  Settings**. Captchas apply to your whole internet connection, so you may
+  briefly see them too when you browse Amazon on the same Wi-Fi.
 * **Buttons don't appear in the widget**: open Termux once, then tap the
   widget's refresh icon. Termux and its add-ons must come from the same store.
 * **Something else**: `ps5 log` shows the last log lines.

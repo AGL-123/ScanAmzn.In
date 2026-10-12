@@ -211,8 +211,9 @@ class Wizard:
             raise SystemExit("No alert channel configured - nothing saved. Run setup again.")
 
         out("\n5) WHAT TO WATCH")
-        out("   Searches find PlayStation gift cards automatically. Optionally add product IDs (ASINs,")
-        out("   the 10 characters after /dp/ in an Amazon link), separated by commas.")
+        out("   The known Sony PlayStation Store gift card listings (Rs.1000, 4000, 9000) are watched")
+        out("   automatically, and searches find others. Optionally add more product IDs (ASINs, the")
+        out("   10 characters after /dp/ in an Amazon link), separated by commas.")
         asins = self._prompt_until(
             "   ASINs", self._check_asins, default=", ".join(self._old("amazon", "asins", default=[])),
             optional=True,
