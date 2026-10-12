@@ -60,6 +60,8 @@ class ItemState:
     # they never hold back a real restock alert.
     changed_alerted: bool = False
     last_changed_alert_at: float = -math.inf
+    # Last stock reading was "unavailable" (a 404 in between doesn't change that).
+    seen_unavailable: bool = False
 
 
 @dataclass
@@ -107,6 +109,9 @@ class Monitor:
         self.items: dict[str, ItemState] = {}
         self.discovered: list[str] = []
         self.rotation = 0  # where the next turn starts in settings.rotating_asins
+        # Other values still to check after a restock; survives a round cut
+        # short by a bot check.
+        self.sweep: set[str] = set()
         self.cycle = 0
         self.block_streak = 0
         self.last_success = clock()
@@ -218,27 +223,32 @@ class Monitor:
                 if report.blocked:
                     return report
 
-        # The other gift card values: one per round in turn, or all of them
-        # right away when a card has just come back (restocks often come together).
+        # The other gift card values: one per round in turn. After any card
+        # comes back in stock, all of them (restocks often come together); a
+        # card in stock is checked every round until it sells out.
         rotating = [a for a in self.s.rotating_asins if a not in checked and a not in self.discovered]
-        if rotating:
-            if report.restocked:
-                batch = rotating
-            else:  # cards in stock stay checked every round until they sell out
-                batch = [a for a in rotating if a in self.items and self.items[a].in_stock]
-                waiting = [a for a in rotating if a not in batch]
-                if waiting:  # the next one after the last turn, in list order
-                    order = self.s.rotating_asins
-                    start = self.rotation % len(order)
-                    pick = next(a for a in order[start:] + order[:start] if a in waiting)
-                    self.rotation = order.index(pick) + 1
-                    batch.append(pick)
-            for asin in batch:
-                if self._stop.is_set():
-                    return report
-                if self._check_product(asin, report).status is Status.BLOCKED:
-                    report.blocked = True
-                    return report
+        done = set(checked)
+        self.sweep &= set(rotating)  # the rest were checked this round or are watched every round
+        batch = [a for a in rotating if a in self.sweep or (a in self.items and self.items[a].in_stock)]
+        waiting = [a for a in rotating if a not in batch]
+        if not self.sweep and waiting:  # the next one after the last turn, in list order
+            order = self.s.rotating_asins
+            start = self.rotation % len(order)
+            pick = next(a for a in order[start:] + order[:start] if a in waiting)
+            self.rotation = order.index(pick) + 1
+            batch.append(pick)
+        i = 0
+        while i < len(batch):
+            asin = batch[i]
+            i += 1
+            if self._stop.is_set():
+                return report
+            if self._check_product(asin, report).status is Status.BLOCKED:
+                report.blocked = True
+                return report
+            done.add(asin)
+            self.sweep -= done
+            batch += [a for a in rotating if a in self.sweep and a not in batch]  # a restock just now
         return report
 
     # -- checks ----------------------------------------------------------------
@@ -375,6 +385,7 @@ class Monitor:
                 product.source, shorten(state.title),
             )
         state.status = product.status
+        state.seen_unavailable = product.status is Status.UNAVAILABLE
 
         now = self.clock()
         if product.status is Status.AVAILABLE:
@@ -382,6 +393,7 @@ class Monitor:
             if not state.in_stock:
                 state.in_stock = True
                 report.restocked.append(product.asin)
+                self.sweep = set(self.s.rotating_asins)
                 cooldown = self.s.realert_cooldown_minutes * 60
                 if now - state.last_alert_at >= cooldown:
                     state.last_alert_at = now
@@ -400,7 +412,7 @@ class Monitor:
         changes - possibly to an in-stock layout the bot has never seen - and a
         false alarm costs far less than a missed restock."""
         state = self.items.get(product.asin)
-        if state is None or state.status is not Status.UNAVAILABLE or state.changed_alerted:
+        if state is None or not state.seen_unavailable or state.changed_alerted:
             return
         state.changed_alerted = True
         now = self.clock()
@@ -416,7 +428,7 @@ class Monitor:
             subject=f"🎮 CHECK NOW: {shorten(title, 60)} may be in stock",
             body="\n".join([
                 "The Amazon.in page of a PlayStation gift card you are watching has changed: it no longer",
-                "says \"currently unavailable\", but the bot can't find a price or buy button on it.",
+                "shows \"currently unavailable\" where it used to, and the bot can't find a buy button on it.",
                 "It may be back in stock - open it now:",
                 "",
                 title,

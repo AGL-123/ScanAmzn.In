@@ -37,9 +37,23 @@ _CHROME_RELEASE = (140, date(2025, 9, 2))
 
 
 def chrome_major(today: date | None = None) -> int:
+    """Chrome's current major version, estimated about six weeks behind the
+    release schedule (updates roll out gradually; never claim a future one)."""
     version, released = _CHROME_RELEASE
     days = ((today or date.today()) - released).days
-    return version + max(days, 0) // 29  # a little behind: updates roll out gradually
+    return version + max(days - 42, 0) // 28
+
+
+def _sec_ch_ua(major: int) -> str:
+    """The sec-ch-ua brand list exactly as Chrome builds it: a decoy brand and
+    the order of the three entries both depend on the major version."""
+    chars = " (:-./);=?_"
+    decoy = (f"Not{chars[major % 11]}A{chars[(major + 1) % 11]}Brand", ("8", "99", "24")[major % 3])
+    order = ((0, 1, 2), (0, 2, 1), (1, 0, 2), (1, 2, 0), (2, 0, 1), (2, 1, 0))[major % 6]
+    brands: list[tuple[str, str]] = [("", "")] * 3
+    for slot, brand in zip(order, (decoy, ("Chromium", str(major)), ("Google Chrome", str(major)))):
+        brands[slot] = brand
+    return ", ".join(f'"{name}";v="{v}"' for name, v in brands)
 
 
 def chrome_headers(rotation: int, today: date | None = None) -> dict[str, str]:
@@ -49,7 +63,7 @@ def chrome_headers(rotation: int, today: date | None = None) -> dict[str, str]:
     return {
         "User-Agent": f"Mozilla/5.0 ({ua_platform}) AppleWebKit/537.36 (KHTML, like Gecko) "
                       f"Chrome/{major}.0.0.0 Safari/537.36",
-        "sec-ch-ua": f'"Chromium";v="{major}", "Google Chrome";v="{major}", "Not_A Brand";v="99"',
+        "sec-ch-ua": _sec_ch_ua(major),
         "sec-ch-ua-mobile": "?0",
         "sec-ch-ua-platform": f'"{hint_platform}"',
     }

@@ -480,13 +480,50 @@ def test_known_listings_include_other_values_in_turn():
 
 def test_a_card_checked_in_turn_is_checked_every_round_while_in_stock(fetcher, dispatcher, clock):
     m = rotating_monitor(fetcher, dispatcher, clock)
-    fetcher.set_product("B0ROT00001", product_html("Rs.1000 PlayStation card", available=True))
-    m.run_cycle()  # B0ROT00001's turn: in stock
+    m.run_cycle()  # B0ROT00001's turn: unavailable
+    fetcher.set_product("B0ROT00002", product_html("Rs.2000 PlayStation card", available=True))
+    m.run_cycle()  # B0ROT00002's turn: back in stock - the sweep checks the others too
     fetcher.requests.clear()
     m.run_cycle()
     m.run_cycle()
     pages = [u.rsplit("/", 1)[1] for u in fetcher.requests]
-    assert pages == [ASIN, "B0ROT00001", "B0ROT00002", ASIN, "B0ROT00001", "B0ROT00003"]
+    assert pages == [ASIN, "B0ROT00002", "B0ROT00003", ASIN, "B0ROT00002", "B0ROT00001"]
+
+
+def test_a_card_found_in_its_turn_starts_the_sweep_in_the_same_round(fetcher, dispatcher, clock):
+    m = rotating_monitor(fetcher, dispatcher, clock)
+    m.run_cycle()  # B0ROT00001's turn
+    fetcher.requests.clear()
+    fetcher.set_product("B0ROT00002", product_html("Rs.2000 PlayStation card", available=True))
+    fetcher.set_product("B0ROT00003", product_html("Rs.3000 PlayStation card", available=True, price="₹3,000.00"))
+    m.run_cycle()
+    assert [u.rsplit("/", 1)[1] for u in fetcher.requests] == [ASIN, "B0ROT00002", "B0ROT00001", "B0ROT00003"]
+    assert len(dispatcher.messages) == 2 and m.sweep == set()
+
+
+def test_a_sweep_cut_short_by_a_bot_check_continues_next_round(fetcher, dispatcher, clock):
+    m = rotating_monitor(fetcher, dispatcher, clock)
+    m.run_cycle()
+    fetcher.set_product(ASIN, product_html(TITLE, available=True))
+    fetcher.set_product("B0ROT00002", fixture("aws_waf_challenge.html"), status=202)
+    report = m.run_cycle()  # restock, then a bot check in the middle of the sweep
+    assert report.blocked and m.sweep == {"B0ROT00002", "B0ROT00003"}
+    fetcher.requests.clear()
+    fetcher.set_product("B0ROT00002", product_html("Rs.2000 PlayStation card", available=False))
+    m.run_cycle()
+    assert [u.rsplit("/", 1)[1] for u in fetcher.requests] == [ASIN, "B0ROT00002", "B0ROT00003"]
+    assert m.sweep == set()
+
+
+def test_changed_page_alert_survives_a_404_in_between(fetcher, dispatcher, clock):
+    m = make_monitor(fetcher, dispatcher, clock, **watching())
+    fetcher.set_product(ASIN, product_html(TITLE, available=False))
+    m.run_cycle()
+    fetcher.set_product(ASIN, fixture("not_found.html"), status=404)  # briefly taken down
+    m.run_cycle()
+    fetcher.set_product(ASIN, REDESIGNED)
+    m.run_cycle()
+    assert [x.subject.startswith("🎮 CHECK NOW") for x in dispatcher.messages] == [True]
 
 
 def test_missing_listing_is_reported_once(fetcher, dispatcher, clock, caplog):
