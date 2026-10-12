@@ -10,7 +10,7 @@ import random
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
@@ -22,9 +22,6 @@ from .notifiers import Dispatcher, Message
 from .parser import parse_product, parse_search
 
 log = logging.getLogger(__name__)
-
-IST = timezone(timedelta(hours=5, minutes=30), "IST")
-
 
 def format_inr(amount: float | None) -> str:
     if amount is None:
@@ -80,7 +77,7 @@ class Monitor:
         dispatcher: Dispatcher,
         clock: Callable[[], float] = time.monotonic,
         rng: random.Random | None = None,
-        wall: Callable[[], datetime] = lambda: datetime.now(IST),
+        wall: Callable[[], datetime] | None = None,
     ):
         self.s = settings
         self.fetcher = fetcher
@@ -97,8 +94,8 @@ class Monitor:
         self._requests_in_cycle = 0
         self._dumped: set[str] = set()
         self._stop = threading.Event()
-        self.wall = wall
-        self.started_at = wall()
+        self.wall = wall or (lambda: datetime.now(settings.tz))
+        self.started_at = self.wall()
         self.stats = _Stats()
         self.stats_since = self.started_at
         self.next_status_at = self._next_daily_status(self.started_at)
@@ -334,7 +331,7 @@ class Monitor:
         price = format_inr(product.price)
         if face and product.price:
             price += f" (face value {format_inr(face)})"
-        now = datetime.now(IST).strftime("%d %b %Y, %H:%M:%S IST")
+        now = self.wall().strftime("%d %b %Y, %H:%M:%S %Z").strip()
         lines = [
             "A PlayStation gift card you are watching is AVAILABLE on Amazon.in right now.",
             "These usually sell out within minutes - buy now!",
@@ -407,7 +404,7 @@ class Monitor:
         hour = self.s.daily_status_hour
         if hour < 0:
             return None
-        candidate = after.astimezone(IST).replace(hour=hour, minute=0, second=0, microsecond=0)
+        candidate = after.astimezone(self.s.tz).replace(hour=hour, minute=0, second=0, microsecond=0)
         return candidate if candidate > after else candidate + timedelta(days=1)
 
     def _maybe_daily_status(self) -> None:
@@ -426,7 +423,7 @@ class Monitor:
         lines = [
             "Your Amazon.in PlayStation gift card monitor is running.",
             "",
-            f"Since {self.stats_since:%d %b, %H:%M} IST: {st.cycles} check rounds, {st.pages} pages, "
+            f"Since {self.stats_since:%d %b, %H:%M}: {st.cycles} check rounds, {st.pages} pages, "
             f"{st.alerts} in-stock alert(s), {st.blocked} captcha pause(s), {st.errors} error(s).",
         ]
         if self.health_alerted:
@@ -437,7 +434,7 @@ class Monitor:
             lines.append(f"• {shorten(item.title or item.asin, 60)}: {status}")
         if len(watched) > 15:
             lines.append(f"• …and {len(watched) - 15} more")
-        lines += ["", f"Next status message: {self._next_daily_status(now):%d %b, %H:%M} IST."]
+        lines += ["", f"Next status message: {self._next_daily_status(now):%d %b, %H:%M}."]
         state = f"{len(in_stock)} in stock now" if in_stock else "nothing in stock right now"
         return Message(
             subject=f"✅ PS5 gift card monitor is running ({state})",
@@ -490,7 +487,7 @@ class Monitor:
             return
         self._dumped.add(key)
         safe = "".join(c if c.isalnum() else "_" for c in key)[:60]
-        path = Path(self.s.debug_dump_dir) / f"{datetime.now(IST):%Y%m%d_%H%M%S}_{safe}.html"
+        path = Path(self.s.debug_dump_dir) / f"{self.wall():%Y%m%d_%H%M%S}_{safe}.html"
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(html, encoding="utf-8")

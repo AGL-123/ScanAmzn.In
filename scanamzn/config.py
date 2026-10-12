@@ -14,10 +14,11 @@ import re
 import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import tzinfo
 from pathlib import Path
 from typing import Any
 
-from . import envconfig
+from . import envconfig, timezones
 from .filters import TitleFilter
 from .notifiers import Notifier, NotifyError
 from .notifiers.email import EmailNotifier
@@ -128,8 +129,11 @@ class Settings:
     max_backoff_seconds: float = 900.0
     debug_dump_dir: str = ""
     log_file: str = ""
-    # Hour of day (IST, 0-23) for a daily "still running" message; -1 disables.
+    # Hour of day (0-23, local time) for a daily "still running" message; -1 disables.
     daily_status_hour: int = -1
+    # IANA time zone name (e.g. "Asia/Jerusalem"); empty = the device's own zone.
+    timezone: str = ""
+    tz: tzinfo = field(default_factory=timezones.resolve)
     # JSON file updated after every cycle, read by `scanamzn status`.
     status_file: str = ""
     # [filter]
@@ -206,7 +210,12 @@ def from_dict(data: dict[str, Any]) -> Settings:
     s.log_file = mon.str("log_file", s.log_file)
     s.daily_status_hour = mon.int("daily_status_hour", s.daily_status_hour)
     if not -1 <= s.daily_status_hour <= 23:
-        raise ConfigError("monitor.daily_status_hour must be an hour 0-23 (IST), or -1 to disable")
+        raise ConfigError("monitor.daily_status_hour must be an hour 0-23 (local time), or -1 to disable")
+    s.timezone = mon.str("timezone", "")
+    try:
+        s.tz = timezones.resolve(s.timezone)
+    except timezones.TimezoneError as exc:
+        raise ConfigError(f"monitor.timezone: {exc}") from exc
     status_file = mon.str("status_file", s.status_file)
     s.status_file = str(Path(status_file).expanduser()) if status_file else ""
 

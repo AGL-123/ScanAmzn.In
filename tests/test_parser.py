@@ -112,3 +112,25 @@ def test_search_results():
 def test_search_with_no_results_is_fine_but_unknown_layout_is_flagged():
     assert parse_search('<html><body>No results for "psn xyz".</body></html>').layout_ok
     assert not parse_search("<html><body>Something else entirely</body></html>").layout_ok
+
+
+def test_in_stock_but_not_deliverable_to_visitor_location():
+    # What Amazon shows when it guesses a delivery location outside its area,
+    # e.g. someone browsing Amazon.in from Israel.
+    html = (
+        '<span id="productTitle">PSN ₹1000</span><div id="desktop_buybox">'
+        '<span class="a-price priceToPay"><span class="a-offscreen">₹1,000.00</span></span>'
+        "<div>This item cannot be shipped to your selected delivery location. "
+        "Please choose a different delivery location.</div></div>"
+    )
+    p = parse_product(html, "B0TEST")
+    assert p.status is Status.AVAILABLE
+    assert "deliver to your location" in p.reason
+
+
+def test_out_of_stock_wins_over_delivery_location_message():
+    html = (
+        '<span id="productTitle">x</span><div id="availability">Currently unavailable.</div>'
+        "<div id=\"rightCol\">This item cannot be delivered to your selected location.</div>"
+    )
+    assert parse_product(html, "B0TEST").status is Status.UNAVAILABLE

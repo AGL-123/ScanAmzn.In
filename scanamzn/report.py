@@ -7,7 +7,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 
-from .monitor import IST, format_inr, shorten
+from .monitor import format_inr, shorten
 
 _STATUS_ICON = {
     "available": "🟢 in stock",
@@ -65,7 +65,7 @@ def describe_status_file(path: str | Path, now: datetime | None = None) -> str:
     except (OSError, ValueError) as exc:
         return f"Could not read the status file {path}: {exc}"
 
-    now = now or datetime.now(IST)
+    now = now or datetime.now().astimezone()
     updated = datetime.fromisoformat(data["updated_at"])
     age = (now - updated).total_seconds()
     expected = (data.get("next_check_in_seconds") or data.get("interval_seconds") or 60) + 120
@@ -81,8 +81,8 @@ def describe_status_file(path: str | Path, now: datetime | None = None) -> str:
     lines = [
         "PS5 gift card monitor",
         f"  State:       {state}",
-        f"  Last check:  {updated:%d %b %H:%M:%S} IST ({_ago(age)}), round {data.get('cycle', 0)}",
-        f"  Running since {started:%d %b %H:%M} IST",
+        f"  Last check:  {updated:%d %b %H:%M:%S} ({_ago(age)}), round {data.get('cycle', 0)}",
+        f"  Running since {started:%d %b %H:%M}",
     ]
     if data.get("last_problem"):
         lines.append(f"  Last problem: {data['last_problem']}")

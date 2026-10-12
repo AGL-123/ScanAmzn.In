@@ -62,6 +62,13 @@ _POSITIVE = re.compile(
     r"|usually (?:dispatched|ships)|dispatched within|ships within"
 )
 _OTHER_SELLERS = re.compile(r"available from these sellers|see all buying options")
+# Shown to visitors whose (guessed) delivery location is outside the seller's
+# area, e.g. when browsing Amazon.in from abroad. The item itself is in stock.
+_UNDELIVERABLE = re.compile(
+    r"cannot be (?:delivered|shipped|dispatched) to your (?:selected )?(?:delivery )?(?:location|address|pincode)"
+    r"|(?:does not|doesn't) (?:ship|deliver) to|not (?:deliverable|available for delivery) (?:to|in) your"
+)
+_BUY_BOX = ("#desktop_buybox", "#buybox", "#rightCol")
 
 # Buy-box price containers, most specific first. Product pages carry many other
 # prices (carousels, "customers also bought"), so never search the whole page.
@@ -199,6 +206,9 @@ def parse_product(html: str, asin: str, status_code: int = 200) -> Product:
         _text(soup.select_one(s)) for s in _OUT_OF_STOCK_BOXES
     ):
         product.status, product.reason = Status.UNAVAILABLE, availability[:80] or "out-of-stock box"
+    elif _UNDELIVERABLE.search(availability + " " + _first_text(soup, _BUY_BOX).lower()):
+        product.status = Status.AVAILABLE
+        product.reason = "in stock, but Amazon says it can't deliver to your location"
     elif _POSITIVE.search(availability):
         # Positive wording without a recognised button: report it anyway, a
         # false alarm is much cheaper than a missed restock.

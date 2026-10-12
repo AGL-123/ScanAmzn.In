@@ -4,11 +4,21 @@ The bot runs **on your Android phone itself**, inside the free Termux app. No PC
 is needed at any step. Once it is set up you control it with buttons on your home
 screen: **PS5 Start**, **PS5 Stop**, **PS5 Status**, **PS5 Test alert**,
 **PS5 Settings** and **PS5 Check now**. Alerts arrive by e-mail and WhatsApp,
-and every morning at 9:00 IST you get a short *"still running"* message so you
-know it's alive.
+and every morning (9:00 your time, adjustable) you get a short *"still
+running"* message so you know it's alive.
 
-Why on the phone: Amazon.in trusts a normal Indian mobile or home connection far
-more than cloud servers, which it often answers with captchas.
+Why on the phone: Amazon trusts a normal mobile or home connection far more than
+cloud servers, which it often answers with captchas.
+
+> **Living outside India (for example in Israel)?** That's fine: Amazon.in is
+> open to visitors from anywhere, and the bot uses your phone's time zone and
+> country code. One thing could not be tested in advance: exactly how Amazon.in
+> shows stock to visitors outside India. The bot treats *"can't be delivered to
+> your location"* as in stock. After setup, tap **PS5 Check now**: each
+> PlayStation card should show as *unavailable* or *in stock*. If you see
+> *unknown*, or get a *"cannot check Amazon.in"* warning, the bot can't read
+> Amazon's pages correctly from where you are. Note what PS5 Status shows so it
+> can be fixed.
 
 > **iPhone?** iOS does not let apps run a program in the background 24/7, so
 > the bot can't run on an iPhone. See [No Android phone?](#no-android-phone).
@@ -67,31 +77,20 @@ In Termux, type (or paste) this line and press Enter:
 curl -fsSL https://raw.githubusercontent.com/AGL-123/ScanAmzn.In/HEAD/termux/install.sh | bash
 ```
 
-> **If the repository is private**, that link gives a *404* error. Use these
-> two lines instead:
->
-> ```bash
-> pkg install -y git gh && gh auth login
-> gh repo clone AGL-123/ScanAmzn.In && bash ScanAmzn.In/termux/install.sh
-> ```
->
-> `gh auth login` signs you in to GitHub. Answer *GitHub.com → HTTPS → Yes →
-> Login with a web browser*. It shows an 8-character code. Open
-> <https://github.com/login/device> in your browser, enter the code, and
-> approve. Then come back to Termux.
-
 The installer downloads everything (answer **Y** if it asks about updating
 packages) and then asks a few questions:
 
 | Question | What to enter |
 |---|---|
+| Time zone | press Enter: it's read from your phone (e.g. `Asia/Jerusalem`) |
 | Your Gmail address | `you@gmail.com` (or press Enter to skip e-mail) |
 | Gmail app password | the 16 letters from Step 1 (typing is hidden; spaces are fine) |
 | Send alerts to | press Enter to send them to yourself |
-| Your WhatsApp number | e.g. `9876543210` (+91 is added for you) |
+| Your WhatsApp number | as you normally write it, e.g. `052-123-4567`. The country code is added from your time zone, and the result (`+972521234567`) is shown so you can check it. Or type it with the code: `+972 52 123 4567`. |
 | Your CallMeBot API key | the key from Step 1 |
 | ASINs | press Enter. The bot finds the gift cards by searching. |
 | Check every how many seconds | press Enter (60) |
+| Daily 'still running' message at what hour | press Enter (9), or `-1` for none |
 
 Then it offers to **send a test alert**: answer yes and check that an e-mail and
 a WhatsApp message arrive. Finally, answer yes to **start the monitor**.
@@ -162,7 +161,7 @@ The same commands work typed in Termux: `ps5 start`, `ps5 stop`, `ps5 status`,
 
 * **🎮 IN STOCK**: tap the *Buy* link (or *Add to cart*) right away. These
   cards sell out in minutes.
-* **✅ PS5 gift card monitor is running** every day at 9:00 IST. If it doesn't
+* **✅ PS5 gift card monitor is running** every day at 9:00 (your time). If it doesn't
   arrive one morning, Android has probably closed Termux: open **PS5 Status**,
   tap **PS5 Start**, and recheck Step 5.
 * **⚠️ ScanAmzn cannot check Amazon.in** if checks keep failing for 30 minutes
@@ -199,11 +198,11 @@ The bot can't run on an iPhone, but it can run on any always-on computer: a home
 PC or a Raspberry Pi ([README.md](README.md#running-it-247)), or a cloud server
 you set up and control from your phone's browser.
 
-The only cloud server that stays **free** with an **Indian** address is
-**Oracle Cloud's Always Free** tier (Mumbai or Hyderabad region). It has real
-drawbacks:
+The best free cloud option is **Oracle Cloud's Always Free** tier. Choose the
+Mumbai or Hyderabad region when signing up: the region is permanent, and an
+Indian address suits Amazon.in best. It has real drawbacks:
 
-* signing up needs a Visa or Mastercard credit card (RuPay is often declined);
+* signing up needs a credit card (debit and prepaid cards are often declined);
 * Oracle may reclaim "idle" free servers, and this bot uses very little CPU;
 * Amazon shows captchas to cloud servers much more often than to phones.
 

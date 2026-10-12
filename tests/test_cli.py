@@ -23,6 +23,7 @@ def env(monkeypatch, tmp_path):
         "SCANAMZN_SMTP_PASSWORD": "pw",
         "SCANAMZN_ASINS": "B0ABCDEFGH",
         "SCANAMZN_DAILY_STATUS_HOUR": "9",
+        "SCANAMZN_TIMEZONE": "Asia/Jerusalem",
     }.items():
         monkeypatch.setenv(key, value)
     return tmp_path
@@ -31,7 +32,7 @@ def env(monkeypatch, tmp_path):
 def test_check_config(env, capsys):
     assert main(["check-config"]) == 0
     out = capsys.readouterr().out
-    assert "1 product(s)" in out and "e-mail to so***@gmail.com" in out and "09:00 IST" in out
+    assert "1 product(s)" in out and "e-mail to so***@gmail.com" in out and "09:00 (Asia/Jerusalem)" in out
     assert "someone@gmail.com" not in out  # addresses are masked in logs
 
 

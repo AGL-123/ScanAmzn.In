@@ -11,6 +11,8 @@ requires-python = ">=3.11"
 dependencies = [
     "requests>=2.31",
     "beautifulsoup4>=4.12",
+    # Time zone names on systems without a zoneinfo database (Android, Windows).
+    "tzdata>=2024.1",
 ]
 
 [project.optional-dependencies]

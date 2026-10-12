@@ -36,6 +36,7 @@ _SIMPLE: dict[str, tuple[str, str, str]] = {
     "NOTIFY_WHEN_SOLD_OUT": ("monitor", "notify_when_sold_out", "bool"),
     "HEALTH_ALERT_AFTER_MINUTES": ("monitor", "health_alert_after_minutes", "float"),
     "DAILY_STATUS_HOUR": ("monitor", "daily_status_hour", "int"),
+    "TIMEZONE": ("monitor", "timezone", "str"),
     "STATUS_FILE": ("monitor", "status_file", "str"),
     "DEBUG_DUMP_DIR": ("monitor", "debug_dump_dir", "str"),
     "MAX_MARKUP_PERCENT": ("filter", "max_markup_percent", "float"),
@@ -126,7 +127,7 @@ def _whatsapp(environ: Mapping[str, str], file_configures_whatsapp: bool) -> dic
         if file_configures_whatsapp:
             # The config file sets up WhatsApp and may reference these variables as ${...}.
             return {}
-        raise EnvConfigError(f"{PREFIX}WHATSAPP_PHONE is not set (your number with country code, e.g. +919876543210)")
+        raise EnvConfigError(f"{PREFIX}WHATSAPP_PHONE is not set (your number with country code, e.g. +972521234567)")
 
     if _get(environ, "CALLMEBOT_APIKEY"):
         keys = _words(_get(environ, "CALLMEBOT_APIKEY"))

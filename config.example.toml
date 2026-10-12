@@ -57,6 +57,14 @@ max_backoff_seconds = 900
 debug_dump_dir = ""
 # Also log to this file (rotated at 5 MB).
 log_file = ""
+# Your time zone for message times and the daily status message, e.g.
+# "Asia/Jerusalem" or "Asia/Kolkata". Empty = this device's time zone.
+timezone = ""
+# Send a short "still running" message every day at this hour (0-23, your
+# time zone). -1 disables it.
+daily_status_hour = -1
+# JSON file with the current state, shown by `python -m scanamzn status`.
+status_file = ""
 
 
 [filter]
@@ -105,14 +113,15 @@ provider = "callmebot"
 # https://www.callmebot.com/blog/free-api-whatsapp-messages/) in your
 # contacts and send it "I allow callmebot to send me messages" on WhatsApp.
 recipients = [
-    { phone = "+91XXXXXXXXXX", apikey = "${SCANAMZN_CALLMEBOT_APIKEY}" },
+    # International format: +<country code><number>, e.g. +972521234567
+    { phone = "+972XXXXXXXXX", apikey = "${SCANAMZN_CALLMEBOT_APIKEY}" },
 ]
 
 [whatsapp.twilio]
 account_sid = "${TWILIO_ACCOUNT_SID}"
 auth_token = "${TWILIO_AUTH_TOKEN}"
 from_number = "+14155238886"   # Twilio sandbox number, or your approved sender
-to = ["+91XXXXXXXXXX"]
+to = ["+972XXXXXXXXX"]
 # Outside the 24h session window WhatsApp only delivers approved templates:
 # put a Content Template SID here; its variable {{1}} receives the alert text.
 content_sid = ""
@@ -120,7 +129,7 @@ content_sid = ""
 [whatsapp.meta]
 access_token = "${WHATSAPP_CLOUD_TOKEN}"
 phone_number_id = "000000000000000"
-to = ["91XXXXXXXXXX"]
+to = ["972XXXXXXXXX"]
 api_version = "v25.0"
 # Free-form text only reaches recipients who messaged your number in the last
 # 24h. Otherwise set an approved template; with template_body_param = true its

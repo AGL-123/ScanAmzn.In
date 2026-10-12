@@ -258,10 +258,9 @@ class FakeWall:
 
 def _wall(clock, hour=8, minute=30):
     from datetime import datetime
+    from zoneinfo import ZoneInfo
 
-    from scanamzn.monitor import IST
-
-    return FakeWall(clock, datetime(2026, 10, 12, hour, minute, tzinfo=IST))
+    return FakeWall(clock, datetime(2026, 10, 12, hour, minute, tzinfo=ZoneInfo("Asia/Jerusalem")))
 
 
 def test_run_forever_stops_after_max_runtime(fetcher, dispatcher, clock):
@@ -290,7 +289,7 @@ def test_run_forever_survives_unexpected_errors(fetcher, dispatcher, clock, monk
 
 
 def test_daily_status_message_once_a_day(fetcher, dispatcher, clock):
-    s = make_settings(**watching(daily_status_hour=9, interval_seconds=600))
+    s = make_settings(**watching(daily_status_hour=9, interval_seconds=600, timezone="Asia/Jerusalem"))
     m = Monitor(s, fetcher, dispatcher, clock=clock, rng=random.Random(1), wall=_wall(clock, 8, 30))
     fetcher.set_product(ASIN, product_html(TITLE, available=False))
     m._stop.wait = lambda t: clock.advance(t)
@@ -309,7 +308,7 @@ def test_daily_status_disabled_by_default(fetcher, dispatcher, clock):
 
 
 def test_next_daily_status_time(fetcher, dispatcher, clock):
-    s = make_settings(**watching(daily_status_hour=9))
+    s = make_settings(**watching(daily_status_hour=9, timezone="Asia/Jerusalem"))
     early = Monitor(s, fetcher, dispatcher, clock=clock, wall=_wall(clock, 8, 30))
     late = Monitor(s, fetcher, dispatcher, clock=clock, wall=_wall(clock, 9, 0))
     assert (early.next_status_at.day, early.next_status_at.hour) == (12, 9)

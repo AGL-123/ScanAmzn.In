@@ -28,9 +28,9 @@ say() {
 
 ensure_packages() {
   # A Termux Python upgrade (e.g. 3.13 -> 3.14) drops pip-installed packages.
-  python -c "import requests, bs4" 2>/dev/null && return 0
+  python -c "import requests, bs4, tzdata" 2>/dev/null && return 0
   echo "Re-installing Python packages after a Termux update..."
-  python -m pip install -q requests beautifulsoup4
+  python -m pip install -q requests beautifulsoup4 tzdata
 }
 
 is_running() {
@@ -116,7 +116,7 @@ update() {
   local was_running=0
   is_running && was_running=1
   git pull --ff-only || { echo "Update failed (see above)."; return 1; }
-  python -m pip install -q --upgrade requests beautifulsoup4
+  python -m pip install -q --upgrade requests beautifulsoup4 tzdata
   if [ "$was_running" = 1 ]; then stop; start; fi
   say "PS5 monitor updated."
 }

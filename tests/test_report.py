@@ -1,9 +1,11 @@
 import json
 import os
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
-from scanamzn.monitor import IST
 from scanamzn.report import describe_status_file, text_table
+
+IL = ZoneInfo("Asia/Jerusalem")
 
 ITEMS = [
     {"asin": "B0PSN01000", "title": "PSN Wallet ₹1000 | Digital", "status": "available", "price": 1000.0,
@@ -19,7 +21,7 @@ def test_table():
 
 
 def _status(tmp_path, **overrides):
-    now = datetime(2026, 10, 12, 10, 0, tzinfo=IST)
+    now = datetime(2026, 10, 12, 10, 0, tzinfo=IL)
     data = {
         "pid": os.getpid(),
         "updated_at": (now - timedelta(seconds=40)).isoformat(),
@@ -38,7 +40,7 @@ def test_status_running(tmp_path):
 
 
 def test_status_stale_or_dead(tmp_path):
-    assert "NOT RUNNING" in _status(tmp_path, updated_at=datetime(2026, 10, 12, 8, 0, tzinfo=IST).isoformat())
+    assert "NOT RUNNING" in _status(tmp_path, updated_at=datetime(2026, 10, 12, 8, 0, tzinfo=IL).isoformat())
     assert "NOT RUNNING" in _status(tmp_path, pid=2**22 + 12345)
 
 

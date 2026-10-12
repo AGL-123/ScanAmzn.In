@@ -47,7 +47,7 @@ main() {
   cd "$APP_DIR"  # `python -m scanamzn` runs from the code folder
 
   step "Installing Python packages"
-  python -m pip install -q requests beautifulsoup4 </dev/null
+  python -m pip install -q requests beautifulsoup4 tzdata </dev/null
 
   step "Installing the 'ps5' command and home-screen buttons"
   chmod 700 "$APP_DIR/termux/ps5"

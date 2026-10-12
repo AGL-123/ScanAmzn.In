@@ -90,7 +90,7 @@ file is optional. That is handy for Docker (`--env-file`) and cloud servers.
 | `SCANAMZN_WHATSAPP_PHONE`, `SCANAMZN_CALLMEBOT_APIKEY` | WhatsApp number(s) and CallMeBot key(s), comma-separated, in the same order |
 | `SCANAMZN_ASINS` | ASINs to watch, comma-separated |
 | `SCANAMZN_SEARCH_QUERIES` | search queries separated by `;` |
-| `SCANAMZN_INTERVAL_SECONDS`, `SCANAMZN_DAILY_STATUS_HOUR`, `SCANAMZN_MAX_MARKUP_PERCENT`, `SCANAMZN_MAX_PRICE`, `SCANAMZN_NOTIFY_WHEN_SOLD_OUT`, `SCANAMZN_STATUS_FILE` | same as the config keys |
+| `SCANAMZN_INTERVAL_SECONDS`, `SCANAMZN_DAILY_STATUS_HOUR`, `SCANAMZN_TIMEZONE`, `SCANAMZN_MAX_MARKUP_PERCENT`, `SCANAMZN_MAX_PRICE`, `SCANAMZN_NOTIFY_WHEN_SOLD_OUT`, `SCANAMZN_STATUS_FILE` | same as the config keys |
 | `SCANAMZN_SMTP_HOST` / `_PORT` / `_SECURITY`, `SCANAMZN_EMAIL_FROM`, `SCANAMZN_EMAIL_TO` | other mail servers |
 | `SCANAMZN_TWILIO_ACCOUNT_SID` / `_AUTH_TOKEN` / `_FROM` / `_CONTENT_SID`, `SCANAMZN_META_TOKEN` / `_PHONE_NUMBER_ID` / `_TEMPLATE` | Twilio or Meta instead of CallMeBot (with `SCANAMZN_WHATSAPP_PHONE`) |
 
@@ -123,7 +123,7 @@ Pick one provider in `[whatsapp] provider`:
 
 | Provider | Setup effort | Notes |
 |---|---|---|
-| **`callmebot`** (default) | 2 minutes, free | Personal use only. Save CallMeBot's number from [their instructions page](https://www.callmebot.com/blog/free-api-whatsapp-messages/), send it *"I allow callmebot to send me messages"* on WhatsApp, and it replies with your API key. Put your number (`+91…`) and the key in `[whatsapp.callmebot]`. Each recipient needs their own key. |
+| **`callmebot`** (default) | 2 minutes, free | Personal use only. Save CallMeBot's number from [their instructions page](https://www.callmebot.com/blog/free-api-whatsapp-messages/), send it *"I allow callmebot to send me messages"* on WhatsApp, and it replies with your API key. Put your number in international format (e.g. `+972…`) and the key in `[whatsapp.callmebot]`. Each recipient needs their own key. |
 | **`twilio`** | Twilio account | Works with the Twilio sandbox for testing. WhatsApp only delivers free-form text within 24 h of your last message to the sender. For reliable alerts, create an approved **Content Template** with one variable `{{1}}` and set `content_sid`. |
 | **`meta`** | Meta developer app | Official WhatsApp Cloud API. The same 24-hour rule applies. Outside it, set `template_name` to an approved template with a body variable `{{1}}`, or use `hello_world` with `template_body_param = false` as a bare ping. |
 
@@ -132,7 +132,7 @@ Run `python -m scanamzn test-notify` after any change.
 ## Running it 24/7
 
 The bot only helps while it's running. Run it on an always-on device with a
-residential **Indian internet connection**: an **Android phone**
+residential (home or mobile) internet connection: an **Android phone**
 ([PHONE.md](PHONE.md)), a home PC, a Raspberry Pi or a NAS. Amazon is much
 quicker to show captchas to cloud/datacenter IPs.
 

@@ -8,7 +8,7 @@ import logging.handlers
 import re
 import signal
 import sys
-import time
+from datetime import datetime, tzinfo
 from pathlib import Path
 
 from . import __version__
@@ -22,7 +22,7 @@ from .report import describe_status_file, text_table
 log = logging.getLogger("scanamzn")
 
 
-def _setup_logging(verbose: bool, log_file: str = "") -> None:
+def _setup_logging(verbose: bool, log_file: str = "", tz: tzinfo | None = None) -> None:
     handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
     if log_file:
         Path(log_file).expanduser().parent.mkdir(parents=True, exist_ok=True)
@@ -31,9 +31,10 @@ def _setup_logging(verbose: bool, log_file: str = "") -> None:
                 Path(log_file).expanduser(), maxBytes=5_000_000, backupCount=3, encoding="utf-8"
             )
         )
-    # Log in Indian time wherever the bot runs (GitHub's machines use UTC).
-    formatter = logging.Formatter("%(asctime)s %(levelname)-7s %(message)s", datefmt="%Y-%m-%d %H:%M:%S IST")
-    formatter.converter = lambda secs: time.gmtime(secs + 5.5 * 3600)
+    # Log in the user's time zone (the configured one, else the device's).
+    formatter = logging.Formatter("%(asctime)s %(levelname)-7s %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+    if tz is not None:
+        formatter.converter = lambda secs: datetime.fromtimestamp(secs, tz).timetuple()
     for handler in handlers:
         handler.setFormatter(formatter)
     logging.basicConfig(level=logging.DEBUG if verbose else logging.INFO, handlers=handlers, force=True)
@@ -44,6 +45,10 @@ def _setup_logging(verbose: bool, log_file: str = "") -> None:
 
 def _fetcher(s: Settings) -> Fetcher:
     return Fetcher(s.domain, timeout=s.request_timeout, backend=s.http_backend, proxy=s.proxy)
+
+
+def _zone_name(s: Settings) -> str:
+    return s.timezone or str(getattr(s.tz, "key", "") or datetime.now(s.tz).strftime("%Z"))
 
 
 def _mask_email(address: str) -> str:
@@ -70,7 +75,7 @@ def cmd_check_config(args: argparse.Namespace, s: Settings) -> int:
         "Alerts: " + ("; ".join(channels) if channels else "NONE - set up e-mail and/or WhatsApp"),
     ]
     if s.daily_status_hour >= 0:
-        lines.append(f"Daily 'still running' message at {s.daily_status_hour:02d}:00 IST.")
+        lines.append(f"Daily 'still running' message at {s.daily_status_hour:02d}:00 ({_zone_name(s)}).")
     for line in lines:
         print(line)
     if not notifiers:
@@ -272,7 +277,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
     try:
         settings = load(args.config)
-        _setup_logging(args.verbose, settings.log_file)
+        _setup_logging(args.verbose, settings.log_file, settings.tz)
         commands = {
             "run": cmd_run,
             "once": cmd_once,
