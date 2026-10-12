@@ -58,4 +58,4 @@ def test_status_starting(tmp_path):
 
 
 def test_not_found_label():
-    assert "check the ASIN" in text_table([{"asin": "B0X", "status": "not_found", "price": None}])
+    assert "page not found" in text_table([{"asin": "B0X", "status": "not_found", "price": None}])

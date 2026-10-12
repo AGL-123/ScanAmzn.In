@@ -375,11 +375,11 @@ def test_not_found_asin_is_shown_and_reported(fetcher, dispatcher, clock):
     m = make_monitor(fetcher, dispatcher, clock, **watching(asins=("B0TYPO0000",)))
     m.run_cycle()  # FakeFetcher answers unknown URLs with Amazon's 404 page
     assert m.items["B0TYPO0000"].status is Status.NOT_FOUND
-    assert "check the ASIN" in m.last_problem
+    assert "wrong ASIN" in m.last_problem
     assert m.snapshot()["items"][0]["status"] == "not_found"
     from datetime import datetime
 
-    assert "page not found (check the ASIN)" in m.daily_status_message(datetime.now()).body
+    assert "page not found (removed?)" in m.daily_status_message(datetime.now()).body
 
 
 # --- a watched page that changes to a layout the bot can't read -----------------------
@@ -431,3 +431,66 @@ def test_no_changed_page_alert_without_a_prior_unavailable_reading(fetcher, disp
     fetcher.set_product(ASIN, "<html><body>Sorry, something went wrong</body></html>")  # not a product page
     m.run_cycle()
     assert dispatcher.messages == []
+
+
+# --- other card values, checked in turn ---------------------------------------------------
+
+
+def rotating_monitor(fetcher, dispatcher, clock, rotating=("B0ROT00001", "B0ROT00002", "B0ROT00003")):
+    m = make_monitor(fetcher, dispatcher, clock, **watching())
+    m.s.rotating_asins = list(rotating)
+    fetcher.set_product(ASIN, product_html(TITLE, available=False))
+    for asin in rotating:
+        fetcher.set_product(asin, product_html(f"Rs.{asin[-1]}000 PlayStation card", available=False))
+    return m
+
+
+def test_other_values_are_checked_one_per_round(fetcher, dispatcher, clock):
+    m = rotating_monitor(fetcher, dispatcher, clock)
+    for _ in range(4):
+        m.run_cycle()
+    pages = [u.rsplit("/", 1)[1] for u in fetcher.requests]
+    assert pages == [ASIN, "B0ROT00001", ASIN, "B0ROT00002", ASIN, "B0ROT00003", ASIN, "B0ROT00001"]
+
+
+def test_a_restock_checks_all_other_values_at_once(fetcher, dispatcher, clock):
+    m = rotating_monitor(fetcher, dispatcher, clock)
+    m.run_cycle()
+    fetcher.requests.clear()
+    fetcher.set_product(ASIN, product_html(TITLE, available=True))
+    fetcher.set_product("B0ROT00003", product_html("Rs.3000 PlayStation card", available=True, price="₹3,000.00"))
+    report = m.run_cycle()
+    assert [u.rsplit("/", 1)[1] for u in fetcher.requests] == [ASIN, "B0ROT00001", "B0ROT00002", "B0ROT00003"]
+    assert report.restocked == [ASIN, "B0ROT00003"] and len(dispatcher.messages) == 2
+
+    fetcher.requests.clear()
+    m.run_cycle()  # nothing new: back to one per round, plus the card that is in stock
+    assert [u.rsplit("/", 1)[1] for u in fetcher.requests] == [ASIN, "B0ROT00003", "B0ROT00002"]
+
+
+def test_known_listings_include_other_values_in_turn():
+    from scanamzn.config import KNOWN_LISTINGS, MORE_LISTINGS, from_dict
+
+    s = from_dict({"amazon": {"asins": [next(iter(MORE_LISTINGS))]}})
+    assert s.asins[1:] == list(KNOWN_LISTINGS)
+    assert s.rotating_asins == list(MORE_LISTINGS)[1:]  # a listing given by hand is checked every round
+    assert from_dict({"amazon": {"watch_known_listings": False}}).rotating_asins == []
+    assert not set(KNOWN_LISTINGS) & set(MORE_LISTINGS)
+
+
+def test_a_card_checked_in_turn_is_checked_every_round_while_in_stock(fetcher, dispatcher, clock):
+    m = rotating_monitor(fetcher, dispatcher, clock)
+    fetcher.set_product("B0ROT00001", product_html("Rs.1000 PlayStation card", available=True))
+    m.run_cycle()  # B0ROT00001's turn: in stock
+    fetcher.requests.clear()
+    m.run_cycle()
+    m.run_cycle()
+    pages = [u.rsplit("/", 1)[1] for u in fetcher.requests]
+    assert pages == [ASIN, "B0ROT00001", "B0ROT00002", ASIN, "B0ROT00001", "B0ROT00003"]
+
+
+def test_missing_listing_is_reported_once(fetcher, dispatcher, clock, caplog):
+    m = make_monitor(fetcher, dispatcher, clock, **watching())  # ASIN has no page: 404
+    for _ in range(3):
+        m.run_cycle()
+    assert sum("product page not found" in r.message for r in caplog.records) == 1

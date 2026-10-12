@@ -217,8 +217,11 @@ The verdict is *pass*, *fail* (something was read wrongly; pages are saved), or
 with exit codes 0, 1 and 3. A bot check is retried with a fresh session.
 
 Amazon hides out-of-stock items from search results, so the bot also watches
-the known Sony PlayStation Store gift card listings (`KNOWN_LISTINGS` in
-`scanamzn/config.py`) unless `[amazon] watch_known_listings = false`.
+the known Sony PlayStation Store gift card listings unless
+`[amazon] watch_known_listings = false`: `KNOWN_LISTINGS` in
+`scanamzn/config.py` every round, and the other values (`MORE_LISTINGS`, ₹500
+to ₹12,000) one per round in turn - all of them at once in a round where any
+card has just come back in stock, since restocks often come together.
 
 The running monitor repeats the positive control every
 `monitor.selftest_every_hours` (default 6). It warns after two failures in a

@@ -34,11 +34,25 @@ _ASIN = re.compile(r"^[A-Z0-9]{10}$")
 # PlayStation Store gift card listings on Amazon.in (Sony "Email Delivery"
 # digital codes), found in October 2026. Amazon hides out-of-stock items from
 # search results, so these are watched directly unless
-# [amazon] watch_known_listings = false.
+# [amazon] watch_known_listings = false. These are checked every round:
 KNOWN_LISTINGS = {
     "B07K6RYVHR": "Rs.1000 Sony PlayStation Store Gift Card",
     "B07K6RYVJ5": "Rs.4000 Sony PlayStation Store Gift Card",
     "B0CYNZJLBC": "Rs.9000 Sony PlayStation Store Gift Card",
+}
+# ...and these, the other values, one per round in turn (all at once when any
+# card comes back in stock), so covering them costs little extra data.
+MORE_LISTINGS = {
+    "B093QF35KZ": "Rs.2000 Sony PlayStation Store Gift Card",
+    "B0B3DDW7TB": "Rs.5000 Sony PlayStation Store Gift Card",
+    "B07K6RK5KR": "Rs.4500 Sony PlayStation Network Wallet Top-Up",
+    "B0CYPG8RYH": "Rs.7000 Sony PlayStation Store Gift Card",
+    "B0CYP5X177": "Rs.8000 Sony PlayStation Store Gift Card",
+    "B0CYP97QKQ": "Rs.12000 Sony PlayStation Network Wallet Top-Up",
+    "B07K6PVXJZ": "Rs.500 Sony PlayStation Network Wallet Top-Up",
+    "B07K6QB4NR": "Rs.2500 Sony PlayStation Network Wallet Top-Up",
+    "B083V34M47": "Rs.3500 Sony PlayStation Network Wallet Top-Up (Pay On Delivery)",
+    "B0B4B88S9V": "PlayStation Network Wallet Top-Up 4500",
 }
 
 DEFAULT_QUERIES = [
@@ -127,6 +141,7 @@ class Settings:
     # [amazon]
     domain: str = "www.amazon.in"
     asins: list[str] = field(default_factory=list)
+    rotating_asins: list[str] = field(default_factory=list)  # checked one per round
     search_queries: list[str] = field(default_factory=lambda: list(DEFAULT_QUERIES))
     http_backend: str = "auto"
     proxy: str = ""
@@ -218,6 +233,7 @@ def from_dict(data: dict[str, Any]) -> Settings:
             raise ConfigError(f"amazon.asins: {asin!r} is not a 10-character ASIN")
     if amazon.bool("watch_known_listings", True):
         s.asins += list(KNOWN_LISTINGS)
+        s.rotating_asins = [a for a in MORE_LISTINGS if a not in s.asins]
     s.asins = list(dict.fromkeys(s.asins))
     s.search_queries = [q for q in amazon.list("search_queries", s.search_queries) if q.strip()]
     s.http_backend = amazon.str("http_backend", s.http_backend)

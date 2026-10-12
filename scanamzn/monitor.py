@@ -66,6 +66,7 @@ class ItemState:
 class CycleReport:
     checked: int = 0
     available: list[str] = field(default_factory=list)
+    restocked: list[str] = field(default_factory=list)  # came back in stock this round
     blocked: bool = False
     errors: int = 0
 
@@ -105,6 +106,7 @@ class Monitor:
         self.rng = rng or random.Random()
         self.items: dict[str, ItemState] = {}
         self.discovered: list[str] = []
+        self.rotation = 0  # where the next turn starts in settings.rotating_asins
         self.cycle = 0
         self.block_streak = 0
         self.last_success = clock()
@@ -137,8 +139,10 @@ class Monitor:
     def run_forever(self, max_runtime_seconds: float | None = None) -> None:
         """Check until stop() is called or ``max_runtime_seconds`` have passed."""
         log.info(
-            "watching %d product(s) and %d search(es) on %s every ~%ds",
-            len(self.s.asins), len(self.s.search_queries), self.s.domain, self.s.interval_seconds,
+            "watching %d product(s)%s and %d search(es) on %s every ~%ds",
+            len(self.s.asins),
+            f" (+{len(self.s.rotating_asins)} in turn)" if self.s.rotating_asins else "",
+            len(self.s.search_queries), self.s.domain, self.s.interval_seconds,
         )
         deadline = self.clock() + max_runtime_seconds if max_runtime_seconds else math.inf
         self.write_status_file()  # "starting": the first round can take a while
@@ -212,6 +216,28 @@ class Monitor:
                     return report
                 self._handle_search_results(page, checked, report)
                 if report.blocked:
+                    return report
+
+        # The other gift card values: one per round in turn, or all of them
+        # right away when a card has just come back (restocks often come together).
+        rotating = [a for a in self.s.rotating_asins if a not in checked and a not in self.discovered]
+        if rotating:
+            if report.restocked:
+                batch = rotating
+            else:  # cards in stock stay checked every round until they sell out
+                batch = [a for a in rotating if a in self.items and self.items[a].in_stock]
+                waiting = [a for a in rotating if a not in batch]
+                if waiting:  # the next one after the last turn, in list order
+                    order = self.s.rotating_asins
+                    start = self.rotation % len(order)
+                    pick = next(a for a in order[start:] + order[:start] if a in waiting)
+                    self.rotation = order.index(pick) + 1
+                    batch.append(pick)
+            for asin in batch:
+                if self._stop.is_set():
+                    return report
+                if self._check_product(asin, report).status is Status.BLOCKED:
+                    report.blocked = True
                     return report
         return report
 
@@ -329,9 +355,11 @@ class Monitor:
         if product.status is Status.NOT_FOUND:
             # Shown in the status and daily message; stock state is left alone
             # because a one-off 404 says nothing about availability.
-            self.items.setdefault(product.asin, ItemState(product.asin)).status = Status.NOT_FOUND
-            self.last_problem = f"{product.asin}: product page not found - check the ASIN"
-            log.warning("%s: product page not found - check the ASIN", product.asin)
+            state = self.items.setdefault(product.asin, ItemState(product.asin))
+            if state.status is not Status.NOT_FOUND:  # once, not on every check
+                self.last_problem = f"{product.asin}: product page not found (removed, or a wrong ASIN)"
+                log.warning("%s: product page not found (removed, or a wrong ASIN)", product.asin)
+            state.status = Status.NOT_FOUND
             return
 
         product = self._apply_price_limits(product)
@@ -353,6 +381,7 @@ class Monitor:
             report.available.append(product.asin)
             if not state.in_stock:
                 state.in_stock = True
+                report.restocked.append(product.asin)
                 cooldown = self.s.realert_cooldown_minutes * 60
                 if now - state.last_alert_at >= cooldown:
                     state.last_alert_at = now
@@ -584,7 +613,7 @@ class Monitor:
             lines.append(self.control_line())
         lines += ["", f"Watching {len(watched)} listing(s):"]
         for item in watched[:15]:
-            status = {Status.NOT_FOUND: "page not found (check the ASIN)"}.get(item.status, item.status)
+            status = {Status.NOT_FOUND: "page not found (removed?)"}.get(item.status, item.status)
             status = status or "not checked yet"
             lines.append(f"• {shorten(item.title or item.asin, 60)}: {status}")
         if len(watched) > 15:

@@ -13,7 +13,7 @@ _STATUS_ICON = {
     "available": "🟢 in stock",
     "overpriced": "🟠 overpriced",
     "unavailable": "⚪ unavailable",
-    "not_found": "❌ page not found (check the ASIN)",
+    "not_found": "❌ page not found (removed, or a wrong ASIN)",
     None: "… not checked yet",
 }
 

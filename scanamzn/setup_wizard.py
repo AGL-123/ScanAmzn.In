@@ -98,12 +98,15 @@ def phone_example(country_code: str | None) -> str:
 def data_estimate(interval: int, asins: int, queries: int = 2, search_every: int = 3,
                   max_discovered: int = 8) -> str:
     """Rough daily mobile-data use for the settings the wizard writes."""
-    # Each round fetches every given ASIN plus listings the searches found
-    # (typically ~6 in all, at most max_discovered more), and some searches.
-    searches = queries / search_every
+    from .config import KNOWN_LISTINGS, MORE_LISTINGS
+
+    # Each round fetches the given ASINs, the known gift card listings (plus
+    # one other value in turn), listings the searches found (usually none:
+    # out-of-stock cards are hidden from search) and, every few rounds, the searches.
+    pages = asins + len(KNOWN_LISTINGS) + (1 if MORE_LISTINGS else 0) + queries / search_every
     rounds_per_day = 86400 / (interval + 15)  # ~15 s of fetching per round
-    low = (max(asins, 6) + searches) * rounds_per_day * 0.15 / 1024
-    high = (asins + max_discovered + searches) * rounds_per_day * 0.3 / 1024
+    low = pages * rounds_per_day * 0.15 / 1024
+    high = (pages + max_discovered) * rounds_per_day * 0.3 / 1024
     return f"Estimated data use: about {low:.1f}-{high:.1f} GB a day. Use Wi-Fi if you can."
 
 
@@ -211,9 +214,10 @@ class Wizard:
             raise SystemExit("No alert channel configured - nothing saved. Run setup again.")
 
         out("\n5) WHAT TO WATCH")
-        out("   The known Sony PlayStation Store gift card listings (Rs.1000, 4000, 9000) are watched")
-        out("   automatically, and searches find others. Optionally add more product IDs (ASINs, the")
-        out("   10 characters after /dp/ in an Amazon link), separated by commas.")
+        out("   The Sony PlayStation Store gift card listings are watched automatically: Rs.1000, 4000")
+        out("   and 9000 every check, the other values (Rs.500-12,000) one per check in turn, and all")
+        out("   of them at once when a card comes back. Searches find others. Optionally add more")
+        out("   product IDs (ASINs, the 10 characters after /dp/ in an Amazon link), separated by commas.")
         asins = self._prompt_until(
             "   ASINs", self._check_asins, default=", ".join(self._old("amazon", "asins", default=[])),
             optional=True,

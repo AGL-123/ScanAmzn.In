@@ -327,3 +327,28 @@ def test_selftest_saves_the_page_when_the_first_page_stays_blocked(fetcher):
     assert dumped == ["blocked_page"] and test.verdict == "inconclusive"
     assert "bot check (HTTP 202)" in test.checks[0].detail
 
+
+
+def test_selftest_opens_listings_checked_in_turn_and_saves_only_some(fetcher):
+    fetcher = full_site(fetcher)
+    s = _settings(asins=["B0PSN02000"])
+    s.rotating_asins = ["B0ROT00001", "B0ROT00002", "B0ROT00003"]
+    for asin in s.rotating_asins:
+        fetcher.set_product(asin, fixture("product_unavailable.html"))
+    fetcher.set_product("B0ROT00003", '<span id="productTitle">x</span><div>redesigned</div>')
+    dumped = []
+    test = selftest.run(s, fetcher, NO_PAUSE, lambda k, h: dumped.append(k), lambda m: None)
+    opened = [u.rsplit("/", 1)[1] for u in fetcher.requests if "/dp/" in u]
+    assert {"B0ROT00001", "B0ROT00002", "B0ROT00003"} <= set(opened)
+    pages = [k for k in dumped if k.startswith("product_")]
+    assert "product_B0ROT00001" not in pages and "product_B0ROT00002" not in pages  # plain "unavailable"
+    assert "product_B0ROT00003" in pages and test.checks[2].ok is False  # not understood: saved, reported
+
+
+def test_removed_listing_is_reported_plainly_and_not_as_a_failure(fetcher):
+    fetcher = full_site(fetcher)
+    s = _settings(asins=["B0PSN02000"])
+    s.rotating_asins = ["B0GONE0001"]  # no page: Amazon's 404 "dog" page
+    test = selftest.run(s, fetcher, NO_PAUSE, lambda k, h: None, lambda m: None)
+    pages = test.checks[2]
+    assert pages.ok is True and any("B0GONE0001  page not found" in line for line in pages.lines)

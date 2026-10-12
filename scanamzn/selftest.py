@@ -26,6 +26,8 @@ from .parser import delivery_location, is_blocked, parse_product, parse_search
 CONTROL_QUERIES = ("usb c cable", "a4 notebook", "ballpoint pen")
 CONTROL_CHECK = "In-stock detection"
 BLOCK_RETRY_WAIT = 60  # seconds before retrying with a fresh session
+MAX_PAGES = 20  # gift card pages opened by the self-test
+SAVE_FIRST_PAGES = 3  # always saved; later ones only when not plainly "unavailable"
 
 # pause() sleeps between requests and returns True when the caller wants to stop.
 Pause = Callable[[], bool]
@@ -276,9 +278,12 @@ def run(settings, fetcher: Fetcher, pause: Pause, dump: Dump, progress: Callable
         ))
 
     progress("Opening the gift card pages...")
-    asins = list(dict.fromkeys(settings.asins + list(found)))[:6]
+    # Every listing the monitor watches, also those it checks in turn. Saving
+    # them all would make `ps5 export` large: keep the first few (to compare
+    # page layouts) and every page that is not a plain "unavailable".
+    asins = list(dict.fromkeys(settings.asins + list(found) + settings.rotating_asins))[:MAX_PAGES]
     page_lines, unreadable, inconclusive, mismatched, in_stock = [], 0, 0, 0, []
-    for asin in asins:
+    for i, asin in enumerate(asins):
         if pause():
             break
         try:
@@ -287,9 +292,12 @@ def run(settings, fetcher: Fetcher, pause: Pause, dump: Dump, progress: Callable
             page_lines.append(f"{asin}  could not load: {exc}")
             inconclusive += 1
             continue
-        dump(f"product_{asin}", page.text)
         product = parse_product(page.text, asin, page.status_code)
         listed = found.get(asin)
+        mismatch = bool(listed and listed.status is Status.AVAILABLE and listed.price
+                        and product.status is Status.UNAVAILABLE)
+        if i < SAVE_FIRST_PAGES or mismatch or product.status not in (Status.UNAVAILABLE, Status.BLOCKED):
+            dump(f"product_{asin}", page.text)
         if product.status in (Status.BLOCKED, Status.ERROR):
             page_lines.append(f"{asin}  {'bot check' if product.status is Status.BLOCKED else product.reason}")
             inconclusive += 1
@@ -300,12 +308,14 @@ def run(settings, fetcher: Fetcher, pause: Pause, dump: Dump, progress: Callable
             continue
         if product.status is Status.AVAILABLE:
             in_stock.append(asin)
-        if (listed and listed.status is Status.AVAILABLE and listed.price
-                and product.status is Status.UNAVAILABLE):
+        if mismatch:
             mismatched += 1
             page_lines.append(
                 f"{asin}  search shows it in stock at {_inr(listed.price)}, but its page reads unavailable (saved)"
             )
+            continue
+        if product.status is Status.NOT_FOUND:
+            page_lines.append(f"{asin}  page not found (Amazon removed this listing?)")
             continue
         page_lines.append(f"{asin}  {product.status}: {_short(product.title or (listed and listed.title) or '', 45)}")
     if not asins:

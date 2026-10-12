@@ -240,7 +240,7 @@ real site: it picks an everyday product (such as a USB cable) that Amazon.in
 shows with a price, opens its page, and checks that it reads it as **in
 stock**.
 
-**Tap PS5 Check now** (takes about half a minute). It checks:
+**Tap PS5 Check now** (takes about a minute). It checks:
 
 1. that Amazon.in answers (it opens the first gift card page, the same kind of
    page the bot watches), and where Amazon thinks you are (*delivery
@@ -248,8 +248,11 @@ stock**.
 2. that the searches return results and which PlayStation gift card listings
    they found (Amazon hides out-of-stock items from search, so finding none is
    normal; that's why the bot also watches the known Sony PlayStation Store
-   gift card listings, Rs.1000 / 4000 / 9000, directly);
-3. that those gift card pages are understood (*unavailable* / *in stock*);
+   gift card listings directly: Rs.1000 / 4000 / 9000 every check, the other
+   values from Rs.500 to Rs.12,000 one per check in turn, and all of them at
+   once as soon as any card comes back);
+3. that all those gift card pages are understood (*unavailable* / *in stock*;
+   *page not found* means Amazon removed that listing);
 4. that an in-stock product is read as **in stock** with its price.
 
 If Amazon asks for a bot check, it waits a minute and retries with a fresh
@@ -280,8 +283,9 @@ warned if it fails twice in a row.
 ## Mobile data and battery
 
 Every check downloads the Amazon pages it watches, roughly 0.15-0.3 MB each.
-With the default settings (a check every 60 s, searches every 3rd check, up to
-8 listings) that is about **1-3 GB a day**. The setup wizard shows the estimate
+With the default settings (a check every 60 s: three gift card pages plus one
+other value in turn, searches every 3rd check) that is about **1-2 GB a day**,
+more while searches keep finding listings. The setup wizard shows the estimate
 for your settings. Use **Wi-Fi** if you can, or choose a longer interval in
 **PS5 Settings** (120 s roughly halves it). Battery use is modest, but keep the
 phone on the charger if you can.
