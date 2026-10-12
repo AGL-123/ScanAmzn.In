@@ -216,6 +216,11 @@ below).
 
 * **🎮 IN STOCK**: tap the *Buy* link (or *Add to cart*) right away. These
   cards sell out in minutes.
+* **🎮 CHECK NOW: … may be in stock**: a gift card page that said *currently
+  unavailable* has changed to something the bot can't read. That may be a
+  restock in a layout the bot hasn't seen yet, so open the link right away.
+  If it was a false alarm, run `ps5 export` and send the files so the bot
+  learns that page.
 * **✅ PS5 gift card monitor is running** every day at 9:00 (your time). If it doesn't
   arrive one morning, Android has probably closed Termux: open **PS5 Status**,
   tap **PS5 Start**, and recheck Step 5.
@@ -237,8 +242,9 @@ stock**.
 
 **Tap PS5 Check now** (takes about half a minute). It checks:
 
-1. that Amazon.in can be reached without a captcha, and where Amazon thinks
-   you are (*delivery location*);
+1. that Amazon.in answers (it opens the first gift card page, the same kind of
+   page the bot watches), and where Amazon thinks you are (*delivery
+   location*);
 2. that the searches return results and which PlayStation gift card listings
    they found (Amazon hides out-of-stock items from search, so finding none is
    normal; that's why the bot also watches the known Sony PlayStation Store
@@ -246,8 +252,10 @@ stock**.
 3. that those gift card pages are understood (*unavailable* / *in stock*);
 4. that an in-stock product is read as **in stock** with its price.
 
-If Amazon asks for a bot check in the middle, it waits a minute and retries with
-a fresh session (up to twice), so a check can take 2-3 minutes. It ends with one
+If Amazon asks for a bot check, it waits a minute and retries with a fresh
+session (up to twice), so a check can take 2-3 minutes. (The bot never opens
+Amazon's home page: Amazon now shows it only to browsers that run JavaScript.
+The product and search pages the bot reads are not affected.) It ends with one
 of three results, also sent to Telegram (and e-mail):
 
 * **✅ … would see a restock**: all good (⚠️ lines, if any, are details).

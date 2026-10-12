@@ -19,11 +19,12 @@ from .fetcher import FetchError, Fetcher
 from .filters import face_value
 from .models import DEFINITIVE, Product, SearchPage, Status
 from .notifiers import INFO, Dispatcher, Message
-from .parser import parse_product, parse_search
+from .parser import is_product_page, parse_product, parse_search
 
 log = logging.getLogger(__name__)
 
 HEARTBEAT_EVERY_SECONDS = 240
+CHANGED_PAGE_COOLDOWN_SECONDS = 3600  # between "page changed, may be in stock" alerts per item
 CONTROL_RETRY_SECONDS = 1800  # after an inconclusive or first failed in-stock check
 MAX_DEBUG_PAGES = 30
 
@@ -55,6 +56,10 @@ class ItemState:
     seller: str = ""
     in_stock: bool = False
     last_alert_at: float = -math.inf
+    # "Page changed, may be in stock" alerts; separate from last_alert_at so
+    # they never hold back a real restock alert.
+    changed_alerted: bool = False
+    last_changed_alert_at: float = -math.inf
 
 
 @dataclass
@@ -228,6 +233,8 @@ class Monitor:
             product = parse_product(page.text, asin, page.status_code)
             if product.status is Status.UNKNOWN:
                 self._dump(f"product_{asin}", page.text)
+                if is_product_page(page.text):
+                    self._maybe_changed_page_alert(product)
         self._record(product, report)
         return product
 
@@ -329,6 +336,7 @@ class Monitor:
 
         product = self._apply_price_limits(product)
         state = self.items.setdefault(product.asin, ItemState(product.asin))
+        state.changed_alerted = False
         state.title = product.title or state.title
         state.price = product.price
         state.seller = product.seller
@@ -356,6 +364,42 @@ class Monitor:
             state.in_stock = False
             if self.s.notify_when_sold_out:
                 self.dispatcher.send(self._sold_out_message(state, product))
+
+    def _maybe_changed_page_alert(self, product: Product) -> None:
+        """A watched page that read "unavailable" is now a product page the bot
+        can't read. Gift card pages only change like this when the listing
+        changes - possibly to an in-stock layout the bot has never seen - and a
+        false alarm costs far less than a missed restock."""
+        state = self.items.get(product.asin)
+        if state is None or state.status is not Status.UNAVAILABLE or state.changed_alerted:
+            return
+        state.changed_alerted = True
+        now = self.clock()
+        if now - state.last_changed_alert_at < CHANGED_PAGE_COOLDOWN_SECONDS:
+            log.info("%s page changed again; alerted less than an hour ago", product.asin)
+            return
+        state.last_changed_alert_at = now
+        self.stats.alerts += 1
+        title = state.title or product.title or f"ASIN {state.asin}"
+        url = self.fetcher.product_url(state.asin)
+        log.warning("%s: page changed and can't be read - sending a 'may be in stock' alert", product.asin)
+        self.dispatcher.send(Message(
+            subject=f"🎮 CHECK NOW: {shorten(title, 60)} may be in stock",
+            body="\n".join([
+                "The Amazon.in page of a PlayStation gift card you are watching has changed: it no longer",
+                "says \"currently unavailable\", but the bot can't find a price or buy button on it.",
+                "It may be back in stock - open it now:",
+                "",
+                title,
+                "",
+                f"Buy: {url}",
+                f"Add to cart: {self.fetcher.cart_url(state.asin)}",
+                "",
+                "The page was saved. If this was a false alarm, run `ps5 export` and send the files,",
+                "so the bot learns to read this page.",
+            ]),
+            summary=f"{shorten(title, 60)} may be in stock on Amazon.in (its page changed): {url}",
+        ))
 
     def _restock_message(self, state: ItemState, product: Product) -> Message:
         title = state.title or f"ASIN {state.asin}"

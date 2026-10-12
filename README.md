@@ -204,7 +204,9 @@ The gift cards are nearly always out of stock, so normal running never shows the
 bot reading an *in-stock* page. `python -m scanamzn selftest` therefore checks,
 against the live site:
 
-- reachability and Amazon's guessed delivery location;
+- reachability (on the first watched page - Amazon's home page is an AWS
+  JavaScript challenge for non-browsers, so the bot never uses it) and Amazon's
+  guessed delivery location;
 - the search results and matching gift card listings;
 - that those product pages are understood;
 - a **positive control**: an everyday product that search shows with a price
@@ -221,7 +223,10 @@ the known Sony PlayStation Store gift card listings (`KNOWN_LISTINGS` in
 The running monitor repeats the positive control every
 `monitor.selftest_every_hours` (default 6). It warns after two failures in a
 row, and reports the last result in the daily status message and in `status`.
-Pages it could not read are saved to `monitor.debug_dump_dir`.
+Pages it could not read are saved to `monitor.debug_dump_dir`. If a watched
+page that read *unavailable* turns into a product page the bot can't read, it
+sends a **CHECK NOW: may be in stock** alert (at most once an hour per
+listing): a restock in an unfamiliar layout must not go unnoticed.
 
 ## Tuning
 

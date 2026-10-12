@@ -380,3 +380,54 @@ def test_not_found_asin_is_shown_and_reported(fetcher, dispatcher, clock):
     from datetime import datetime
 
     assert "page not found (check the ASIN)" in m.daily_status_message(datetime.now()).body
+
+
+# --- a watched page that changes to a layout the bot can't read -----------------------
+
+REDESIGNED = f'<html><body><span id="productTitle">{TITLE}</span><div>new buy box</div></body></html>'
+
+
+def test_unavailable_page_that_becomes_unreadable_alerts_check_now(fetcher, dispatcher, clock):
+    m = make_monitor(fetcher, dispatcher, clock, **watching())
+    fetcher.set_product(ASIN, product_html(TITLE, available=False))
+    m.run_cycle()
+    fetcher.set_product(ASIN, REDESIGNED)
+    clock.advance(60)
+    m.run_cycle()
+    assert len(dispatcher.messages) == 1
+    msg = dispatcher.messages[0]
+    assert "CHECK NOW" in msg.subject and msg.kind == "alert"
+    assert f"/dp/{ASIN}" in msg.body and "ps5 export" in msg.body
+    from pathlib import Path
+
+    saved = [f.name for f in Path(m.s.debug_dump_dir).glob("*.html")]
+    assert len(saved) == 1 and saved[0].endswith(f"_product_{ASIN}.html")  # for `ps5 export`
+    clock.advance(60)
+    m.run_cycle()  # still unreadable: no repeat
+    assert len(dispatcher.messages) == 1
+
+    # A real restock right after is still announced (separate timer).
+    fetcher.set_product(ASIN, product_html(TITLE, available=True))
+    clock.advance(60)
+    m.run_cycle()
+    assert len(dispatcher.messages) == 2 and "IN STOCK" in dispatcher.messages[1].subject
+
+
+def test_changed_page_alert_is_limited_to_one_per_hour(fetcher, dispatcher, clock):
+    m = make_monitor(fetcher, dispatcher, clock, **watching())
+    for minutes, html in ((0, False), (1, REDESIGNED), (2, False), (3, REDESIGNED), (63, False), (64, REDESIGNED)):
+        clock.t = 1000 + minutes * 60
+        fetcher.set_product(ASIN, html if isinstance(html, str) else product_html(TITLE, available=False))
+        m.run_cycle()
+    assert [x.subject.startswith("🎮 CHECK NOW") for x in dispatcher.messages] == [True, True]
+
+
+def test_no_changed_page_alert_without_a_prior_unavailable_reading(fetcher, dispatcher, clock):
+    m = make_monitor(fetcher, dispatcher, clock, **watching())
+    fetcher.set_product(ASIN, REDESIGNED)  # unreadable from the start: nothing changed
+    m.run_cycle()
+    fetcher.set_product(ASIN, product_html(TITLE, available=False))
+    m.run_cycle()
+    fetcher.set_product(ASIN, "<html><body>Sorry, something went wrong</body></html>")  # not a product page
+    m.run_cycle()
+    assert dispatcher.messages == []

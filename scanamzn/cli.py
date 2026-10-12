@@ -258,7 +258,9 @@ def cmd_selftest(args: argparse.Namespace, s: Settings) -> int:
         fetcher.close()
     text = result.summary()
     if saved:
-        text += f"\n\nThe pages it read were saved; `ps5 export` copies them to Downloads ({len(saved)} files)."
+        n = len(set(saved))
+        text += (f"\n\nThe pages it read were saved; `ps5 export` copies them to Downloads "
+                 f"({n} file{'' if n == 1 else 's'}).")
     print("\n" + text)
     try:
         folder.mkdir(parents=True, exist_ok=True)

@@ -106,7 +106,8 @@ def in_stock_control(
 
 class RetryingFetcher:
     """Wraps a Fetcher: when Amazon answers with a bot check, wait, start a fresh
-    session and try again (a limited number of times for the whole test)."""
+    session and try again (a limited number of times for the whole test).
+    Pages that loaded are kept, so a page is not requested twice in one test."""
 
     def __init__(self, fetcher: Fetcher, wait: Callable[[float], None], progress: Callable[[str], None],
                  retries: int = 2):
@@ -114,11 +115,15 @@ class RetryingFetcher:
         self.backend = fetcher.backend
         self.product_url, self.search_url = fetcher.product_url, fetcher.search_url
         self.blocks = 0
+        self._loaded: dict[str, Page] = {}
 
     def get(self, url: str) -> Page:
+        if url in self._loaded:
+            return self._loaded[url]
         while True:
             page = self.fetcher.get(url)
             if not is_blocked(page.text, page.status_code):
+                self._loaded[url] = page
                 return page
             self.blocks += 1
             if self.retries <= 0:
@@ -177,6 +182,14 @@ class SelfTest:
         return "\n".join(lines)
 
 
+def first_url(settings, fetcher: Fetcher) -> str:
+    """The page that proves Amazon.in answers: one the monitor really reads.
+    (Not the home page - Amazon shows it only to browsers that run JavaScript.)"""
+    if settings.asins:
+        return fetcher.product_url(settings.asins[0])
+    return fetcher.search_url(settings.search_queries[0])  # config requires one or the other
+
+
 def run(settings, fetcher: Fetcher, pause: Pause, dump: Dump, progress: Callable[[str], None],
         wait: Callable[[float], None] | None = None) -> SelfTest:
     """All checks in order. Search and gift card pages are always saved via
@@ -187,20 +200,20 @@ def run(settings, fetcher: Fetcher, pause: Pause, dump: Dump, progress: Callable
 
     progress("Checking that Amazon.in can be reached...")
     try:
-        home = site.get(f"https://{settings.domain}/")
+        first = site.get(first_url(settings, fetcher))
     except FetchError as exc:
         # No internet proves nothing about page reading: not conclusive.
         test.checks.append(Check("Amazon.in reachable", None, f"no connection - is the internet on? ({exc})"))
         return test
-    if is_blocked(home.text, home.status_code):
-        dump("blocked_home", home.text)
+    if is_blocked(first.text, first.status_code):
+        dump("blocked_page", first.text)
         test.checks.append(Check(
             "Amazon.in reachable", None,
-            f"Amazon keeps asking for a bot check (HTTP {home.status_code}); the monitor waits and retries "
+            f"Amazon keeps asking for a bot check (HTTP {first.status_code}); the monitor waits and retries "
             "by itself. If this happens often, try `ps5 boost`.",
         ))
         return test
-    where = delivery_location(home.text) or "not shown"
+    where = delivery_location(first.text) or "not shown"
     test.checks.append(Check(
         "Amazon.in reachable", True,
         f"via {fetcher.backend}; Amazon's delivery location: {where}"

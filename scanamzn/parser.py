@@ -32,6 +32,10 @@ _BLOCK_MARKERS = (
     "make sure you&#39;re not a robot",
     "api-services-support@amazon.com",
     "to discuss automated access to amazon data",
+    # AWS WAF JavaScript challenge / CAPTCHA (normally HTTP 202 / 405).
+    "awswafcookiedomainlist",
+    "awswafintegration",
+    ".token.awswaf.com",
 )
 _NOT_FOUND_MARKER = "the web address you entered is not a functioning page"
 # Present only on real pages; a page carrying one is never a robot/404 page.
@@ -145,6 +149,11 @@ def is_blocked(html: str, status_code: int = 200) -> bool:
         return False
     lower = html.lower()
     return any(marker in lower for marker in _BLOCK_MARKERS)
+
+
+def is_product_page(html: str) -> bool:
+    """True for a real product page (it has the product title block)."""
+    return _REAL_PAGE_MARKERS[0] in html
 
 
 def _is_not_found(html: str, status_code: int) -> bool:

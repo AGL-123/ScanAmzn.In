@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import logging
 import random
-import time
 from dataclasses import dataclass
+from datetime import date
 from urllib.parse import quote_plus
 
 log = logging.getLogger(__name__)
@@ -25,14 +25,36 @@ import requests
 
 # Rotated after a captcha so the next session looks like a different browser.
 _IMPERSONATE = ("chrome", "chrome136", "chrome131", "edge101", "safari184")
-_USER_AGENTS = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/140.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/140.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/140.0.0.0 Safari/537.36",
+# (user-agent platform, sec-ch-ua-platform) of desktop Chrome.
+_PLATFORMS = (
+    ("Windows NT 10.0; Win64; x64", "Windows"),
+    ("Macintosh; Intel Mac OS X 10_15_7", "macOS"),
+    ("X11; Linux x86_64", "Linux"),
 )
+# Chrome ships a new major version about every four weeks. A browser claiming
+# a version from years ago is itself a bot signal, so derive a current one.
+_CHROME_RELEASE = (140, date(2025, 9, 2))
+
+
+def chrome_major(today: date | None = None) -> int:
+    version, released = _CHROME_RELEASE
+    days = ((today or date.today()) - released).days
+    return version + max(days, 0) // 29  # a little behind: updates roll out gradually
+
+
+def chrome_headers(rotation: int, today: date | None = None) -> dict[str, str]:
+    """User agent plus the client hints real Chrome sends with it."""
+    ua_platform, hint_platform = _PLATFORMS[rotation % len(_PLATFORMS)]
+    major = chrome_major(today)
+    return {
+        "User-Agent": f"Mozilla/5.0 ({ua_platform}) AppleWebKit/537.36 (KHTML, like Gecko) "
+                      f"Chrome/{major}.0.0.0 Safari/537.36",
+        "sec-ch-ua": f'"Chromium";v="{major}", "Google Chrome";v="{major}", "Not_A Brand";v="99"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": f'"{hint_platform}"',
+    }
+
+
 _BROWSER_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Accept-Language": "en-IN,en-GB;q=0.9,en;q=0.8",
@@ -73,9 +95,9 @@ class Fetcher:
         if backend not in ("curl_cffi", "requests"):
             raise FetchError(f"unknown http_backend {backend!r}")
         self.backend = backend
-        self._rotation = 0
+        # Random start, so every run doesn't open with the same fingerprint.
+        self._rotation = random.randrange(len(_IMPERSONATE) * len(_PLATFORMS))
         self._session = None
-        self.sleep = time.sleep
         log.debug("HTTP backend: %s", backend)
 
     # -- URLs ---------------------------------------------------------------
@@ -104,17 +126,13 @@ class Fetcher:
             if proxies:
                 session.proxies.update(proxies)
             session.headers.update(_BROWSER_HEADERS)
-            session.headers["User-Agent"] = _USER_AGENTS[self._rotation % len(_USER_AGENTS)]
+            session.headers.update(chrome_headers(self._rotation))
         for name, value in cookies.items():
             session.cookies.set(name, value, domain=self.domain.removeprefix("www"))
-        # Visit the home page first so Amazon issues its normal session cookies.
-        try:
-            session.get(f"https://{self.domain}/", timeout=self.timeout)
-        except Exception as exc:  # noqa: BLE001 - warm-up is best effort
-            log.debug("warm-up request failed: %s", exc)
-        # A person looks at the home page for a moment before searching; an
-        # instant second request is a classic bot signature.
-        self.sleep(random.uniform(2.0, 4.0))
+        # No warm-up visit to the home page: Amazon now answers it with an AWS
+        # JavaScript challenge that only a real browser can pass, while product
+        # and search pages are served normally. The first real page sets the
+        # session cookies, as for anyone arriving from a search engine.
         return session
 
     def reset(self) -> None:

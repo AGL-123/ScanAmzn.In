@@ -1,5 +1,5 @@
 from scanamzn.models import Status
-from scanamzn.parser import is_blocked, parse_price, parse_product, parse_search
+from scanamzn.parser import is_blocked, is_product_page, parse_price, parse_product, parse_search
 
 from .conftest import fixture, product_html
 
@@ -134,3 +134,14 @@ def test_out_of_stock_wins_over_delivery_location_message():
         "<div id=\"rightCol\">This item cannot be delivered to your selected location.</div>"
     )
     assert parse_product(html, "B0TEST").status is Status.UNAVAILABLE
+
+
+def test_aws_waf_challenge_page_is_blocked_whatever_the_status():
+    # Saved from Amazon.in's home page on the user's phone (tokens removed).
+    page = fixture("aws_waf_challenge.html")
+    for status in (202, 200, 405):
+        assert is_blocked(page, status)
+        assert parse_product(page, "B0X", status).status is Status.BLOCKED
+    assert parse_search(page, 200).blocked
+    assert not is_product_page(page)
+    assert is_product_page(product_html("x", available=False))

@@ -78,3 +78,26 @@ def test_wrong_type_error_hides_secret_values():
     with pytest.raises(ConfigError) as info:
         build_notifiers(from_dict({"email": {"enabled": True, "password": 123456789}}))
     assert "123456789" not in str(info.value) and "(hidden)" in str(info.value)
+
+
+def test_fetcher_sends_a_current_consistent_chrome_identity(monkeypatch):
+    from datetime import date
+
+    import requests
+
+    from scanamzn import fetcher as fetcher_mod
+
+    assert fetcher_mod.chrome_major(date(2025, 9, 2)) == 140
+    assert 150 <= fetcher_mod.chrome_major(date(2026, 10, 12)) <= 155
+    for rotation in range(3):
+        h = fetcher_mod.chrome_headers(rotation, date(2026, 10, 12))
+        major = str(fetcher_mod.chrome_major(date(2026, 10, 12)))
+        assert f"Chrome/{major}.0.0.0" in h["User-Agent"] and f'v="{major}"' in h["sec-ch-ua"]
+        platform = h["sec-ch-ua-platform"].strip('"')
+        assert {"Windows": "Windows NT", "macOS": "Mac OS X", "Linux": "Linux"}[platform] in h["User-Agent"]
+
+    # No warm-up request: a new session makes no request of its own.
+    monkeypatch.setattr(requests.Session, "get", lambda *a, **k: (_ for _ in ()).throw(AssertionError("request")))
+    f = fetcher_mod.Fetcher(backend="requests")
+    session = f._new_session()
+    assert session.headers["sec-ch-ua-mobile"] == "?0"

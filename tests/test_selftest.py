@@ -6,7 +6,7 @@ from scanamzn.selftest import in_stock_control
 
 from .conftest import fixture, make_settings, product_html
 
-HOME = '<html><body><span id="glow-ingress-line2">Israel</span></body></html>'
+GLOW = '<span id="glow-ingress-line2">Israel</span>'
 NO_PAUSE = lambda: False  # noqa: E731
 
 
@@ -54,8 +54,9 @@ def test_control_is_inconclusive_on_captcha_or_network(fetcher):
 
 
 def full_site(fetcher):
-    fetcher.pages["https://www.amazon.in/"] = (200, HOME)
-    fetcher.set_search("playstation gift card", fixture("search_results.html"))
+    # Amazon's home page is a JavaScript challenge now; the test must not need it.
+    fetcher.pages["https://www.amazon.in/"] = (202, fixture("aws_waf_challenge.html"))
+    fetcher.set_search("playstation gift card", fixture("search_results.html").replace("</body>", GLOW + "</body>"))
     fetcher.set_product("B0PSN02000", fixture("product_unavailable.html"))
     fetcher.set_product("B0PSN05000", fixture("product_other_sellers.html"))
     return control_fetcher(fetcher, first="available")
@@ -82,7 +83,7 @@ def test_full_selftest_reports_unreadable_gift_card_page(fetcher):
 
 
 def test_full_selftest_stops_on_captcha(fetcher):
-    fetcher.pages["https://www.amazon.in/"] = (200, fixture("captcha.html"))
+    fetcher.set_search("psn", fixture("captcha.html"))
     s = make_settings(amazon={"search_queries": ["psn"]})
     test = selftest.run(s, fetcher, NO_PAUSE, lambda k, h: None, lambda m: None)
     # A bot check is not a reading failure: the verdict is "not conclusive".
@@ -300,3 +301,29 @@ def test_selftest_command_clears_old_pages_and_reports_inconclusive(cli_env, mon
     assert cli.main(["selftest", "--send"]) == 3
     assert not (state / "debug" / "selftest_product_OLD.html").exists()
     assert sent[0].subject.startswith("⚠️") and "not conclusive" in sent[0].body
+
+
+# --- Amazon's home page became a JavaScript challenge (seen on the user's phone) ----
+
+
+def test_selftest_starts_with_a_watched_gift_card_page_not_the_home_page(fetcher):
+    fetcher = full_site(fetcher)
+    s = _settings(asins=["B0PSN02000"])
+    dumped = []
+    test = selftest.run(s, fetcher, NO_PAUSE, lambda k, h: dumped.append(k), lambda m: None)
+    assert "https://www.amazon.in/" not in fetcher.requests
+    assert fetcher.requests[0] == fetcher.product_url("B0PSN02000")
+    assert fetcher.requests.count(fetcher.product_url("B0PSN02000")) == 1  # loaded once, reused
+    assert test.checks[0].ok is True and "product_B0PSN02000" in dumped
+    assert test.verdict == "pass"
+
+
+def test_selftest_saves_the_page_when_the_first_page_stays_blocked(fetcher):
+    s = _settings(asins=["B0PSN02000"])
+    fetcher.set_product("B0PSN02000", fixture("aws_waf_challenge.html"), status=202)
+    dumped, waits = [], []
+    test = selftest.run(s, fetcher, NO_PAUSE, lambda k, h: dumped.append(k), lambda m: None, wait=waits.append)
+    assert waits == [selftest.BLOCK_RETRY_WAIT] * 2 and fetcher.resets == 2
+    assert dumped == ["blocked_page"] and test.verdict == "inconclusive"
+    assert "bot check (HTTP 202)" in test.checks[0].detail
+
