@@ -24,6 +24,8 @@ from .parser import parse_product, parse_search
 log = logging.getLogger(__name__)
 
 HEARTBEAT_EVERY_SECONDS = 240
+CONTROL_RETRY_SECONDS = 1800  # after an inconclusive or first failed in-stock check
+MAX_DEBUG_PAGES = 30
 
 
 def _http_ping(url: str) -> None:
@@ -113,6 +115,12 @@ class Monitor:
         self.next_status_at = self._next_daily_status(self.started_at)
         self.pinger = pinger
         self.last_ping = -math.inf
+        # In-stock self-test (positive control): first run right after the
+        # first round, then every selftest_every_hours.
+        self.control: dict = {"ok": None, "at": None, "detail": "not run yet"}
+        self.control_failures = 0
+        self.control_alerted = False
+        self.next_control_at = clock()
 
     # -- public API ------------------------------------------------------------
     def watch_list(self) -> list[str]:
@@ -140,6 +148,7 @@ class Monitor:
             self._check_health()
             wait = self.next_wait(report)
             self.stats.add(report)
+            self._maybe_control(report)
             self._maybe_daily_status()
             self._heartbeat()
             self.write_status_file(next_check_in=wait)
@@ -422,6 +431,70 @@ class Monitor:
             )
         )
 
+    # -- in-stock self-test --------------------------------------------------------
+    def _maybe_control(self, report: CycleReport) -> None:
+        """Every few hours, prove the bot still recognises an in-stock product."""
+        if (
+            self.s.selftest_every_hours <= 0
+            or report.blocked
+            or self._stop.is_set()
+            or self.clock() < self.next_control_at
+        ):
+            return
+        from .selftest import in_stock_control  # local import: selftest imports this module's helpers
+
+        self.next_control_at = self.clock() + self.s.selftest_every_hours * 3600
+        result = in_stock_control(
+            self.fetcher, self.s.control_queries,
+            pause=lambda: self._stop.wait(self.rng.uniform(*self.s.request_delay_seconds)),
+            dump=self._dump,
+        )
+        if result.ok is None:  # captcha / no internet: says nothing about the page reading
+            log.info("in-stock self-test inconclusive (%s); retrying later", result.detail)
+            self.next_control_at = self.clock() + CONTROL_RETRY_SECONDS
+            return
+        self.control = {"ok": result.ok, "at": self.wall().isoformat(timespec="seconds"), "detail": result.detail}
+        if result.ok:
+            log.info("in-stock self-test passed: %s", result.detail)
+            self.control_failures = 0
+            if self.control_alerted:
+                self.control_alerted = False
+                self.dispatcher.send(Message(
+                    subject="✅ PS5 monitor self-test passes again",
+                    body=f"The bot recognises in-stock products on Amazon.in again.\n\n{result.detail}",
+                    summary="PS5 monitor self-test passes again.",
+                    kind=INFO,
+                ))
+            return
+        self.control_failures += 1
+        log.warning("in-stock self-test FAILED (%d in a row): %s", self.control_failures, result.detail)
+        if self.control_failures >= 2 and not self.control_alerted:
+            self.control_alerted = True
+            self.dispatcher.send(Message(
+                subject="⚠️ PS5 monitor may miss restocks",
+                body=(
+                    "The bot's self-test opened an everyday product that Amazon.in shows with a price, "
+                    "but could not read it as in stock. Amazon may have changed its pages, so a "
+                    "PlayStation gift card restock could be missed.\n\n"
+                    f"Details: {result.detail}\n\n"
+                    "Tap PS5 Check now for a full self-test, and if it fails, run `ps5 export` and "
+                    "send the files so the bot can be fixed."
+                ),
+                summary=f"PS5 monitor self-test failed: {result.detail}",
+                kind=INFO,
+            ))
+        elif not self.control_alerted:
+            self.next_control_at = self.clock() + CONTROL_RETRY_SECONDS  # confirm soon
+
+    def control_line(self) -> str:
+        c = self.control
+        if c["ok"] is None:
+            return "In-stock self-test: not run yet."
+        when = datetime.fromisoformat(c["at"]).strftime("%d %b %H:%M")
+        if c["ok"]:
+            return f"In-stock self-test: ✅ passed ({when})."
+        return f"In-stock self-test: ❌ FAILED ({when}) - {c['detail']}"
+
     # -- heartbeat, daily status & status file ------------------------------------
     def _heartbeat(self) -> None:
         """Tell the outside "dead man's switch" service that the monitor is alive."""
@@ -459,6 +532,8 @@ class Monitor:
         ]
         if self.health_alerted:
             lines.append(f"⚠️ Checks are currently failing: {self.last_problem}")
+        if self.s.selftest_every_hours > 0:
+            lines.append(self.control_line())
         lines += ["", f"Watching {len(watched)} listing(s):"]
         for item in watched[:15]:
             status = {Status.NOT_FOUND: "page not found (check the ASIN)"}.get(item.status, item.status)
@@ -501,6 +576,7 @@ class Monitor:
             "blocked_streak": self.block_streak,
             "checks_failing": self.health_alerted,
             "last_problem": self.last_problem,
+            "selftest": self.control,
             "items": items,
         }
 
@@ -526,5 +602,9 @@ class Monitor:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(html, encoding="utf-8")
             log.info("saved unrecognised page to %s", path)
+            # Keep only the newest pages (each is ~1 MB).
+            pages = sorted(path.parent.glob("*.html"), key=lambda f: f.stat().st_mtime, reverse=True)
+            for old in pages[MAX_DEBUG_PAGES:]:
+                old.unlink(missing_ok=True)
         except OSError as exc:
             log.warning("could not save debug page: %s", exc)

@@ -5,9 +5,11 @@ from __future__ import annotations
 import argparse
 import logging
 import logging.handlers
+import random
 import re
 import signal
 import sys
+import time
 from datetime import datetime, tzinfo
 from pathlib import Path
 
@@ -15,7 +17,7 @@ from . import __version__
 from .config import ConfigError, Settings, build_notifiers, load
 from .fetcher import FetchError, Fetcher
 from .monitor import Monitor, format_inr, shorten
-from .notifiers import TEST, Dispatcher, Message, Notifier
+from .notifiers import INFO, TEST, Dispatcher, Message, Notifier
 from .parser import parse_product, parse_search
 from .report import describe_status_file, text_table
 
@@ -222,6 +224,59 @@ def cmd_test_notify(args: argparse.Namespace, s: Settings) -> int:
     return 0 if all(ok for _, ok in results) else 1
 
 
+def cmd_selftest(args: argparse.Namespace, s: Settings) -> int:
+    from . import selftest
+
+    folder = selftest.state_dir(s)
+    debug = Path(s.debug_dump_dir).expanduser() if s.debug_dump_dir else folder / "debug"
+    saved: list[Path] = []
+
+    def dump(key: str, html: str) -> None:
+        path = debug / ("selftest_" + "".join(c if c.isalnum() else "_" for c in key)[:60] + ".html")
+        try:
+            debug.mkdir(parents=True, exist_ok=True)
+            path.write_text(html, encoding="utf-8")
+            saved.append(path)
+        except OSError as exc:
+            log.warning("could not save %s: %s", path, exc)
+
+    rng = random.Random()
+    fetcher = _fetcher(s)
+    try:
+        result = selftest.run(
+            s, fetcher,
+            pause=lambda: time.sleep(rng.uniform(*s.request_delay_seconds)),
+            dump=dump,
+            progress=lambda text: print(text, flush=True),
+        )
+    finally:
+        fetcher.close()
+    text = result.summary()
+    if saved:
+        text += f"\n\n{len(saved)} page(s) the bot could not read were saved. Run `ps5 export` to copy them to Downloads."
+    print("\n" + text)
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "selftest.txt").write_text(text + "\n", encoding="utf-8")
+    except OSError as exc:
+        log.warning("could not save the report: %s", exc)
+
+    if args.send:
+        notifiers = build_notifiers(s)
+        if notifiers:
+            dispatcher = Dispatcher(notifiers, retries=1)
+            try:
+                dispatcher.send_and_wait(Message(
+                    subject=("✅" if result.passed else "⚠️") + " PS5 monitor self-test",
+                    body=text,
+                    summary="PS5 monitor self-test " + ("passed" if result.passed else "found problems"),
+                    kind=INFO,
+                ))
+            finally:
+                dispatcher.close()
+    return 0 if result.passed else 1
+
+
 def cmd_status(args: argparse.Namespace, s: Settings) -> int:
     if not s.status_file:
         print("No status_file is configured ([monitor] status_file), so there is nothing to show.")
@@ -294,6 +349,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("test-notify", help="send a test message on every enabled channel")
     sub.add_parser("check-config", help="validate the settings and show what will be watched")
     sub.add_parser("status", help="show what the running monitor is doing")
+    p = sub.add_parser("selftest", help="check against the live site that the bot reads Amazon.in correctly")
+    p.add_argument("--send", action="store_true", help="also send the result by e-mail/Telegram")
     sub.add_parser("setup", help="answer a few questions to create the config file")
     p = sub.add_parser("parse", help="parse a saved Amazon page (for debugging)")
     p.add_argument("file")
@@ -318,6 +375,7 @@ def main(argv: list[str] | None = None) -> int:
             "test-notify": cmd_test_notify,
             "check-config": cmd_check_config,
             "status": cmd_status,
+            "selftest": cmd_selftest,
         }
         return commands[args.command](args, settings)
     except (ConfigError, FetchError) as exc:

@@ -20,6 +20,7 @@ from typing import Any
 
 from . import envconfig, timezones
 from .filters import TitleFilter
+from .selftest import CONTROL_QUERIES
 from .notifiers import Notifier, NotifyError
 from .notifiers.email import EmailNotifier
 from .notifiers.telegram import TelegramNotifier
@@ -142,6 +143,11 @@ class Settings:
     # "Dead man's switch" URL (e.g. healthchecks.io) pinged every few minutes
     # while the monitor runs, so an outside service can warn if it stops.
     heartbeat_url: str = ""
+    # How often the running monitor re-checks that it still recognises an
+    # in-stock product (see selftest.py); 0 disables.
+    selftest_every_hours: float = 6.0
+    # Searches for everyday products used as that in-stock reference.
+    control_queries: list[str] = field(default_factory=lambda: list(CONTROL_QUERIES))
     # [filter]
     title_filter: TitleFilter = field(
         default_factory=lambda: TitleFilter(DEFAULT_REQUIRE_ANY, DEFAULT_EXCLUDE)
@@ -233,6 +239,9 @@ def from_dict(data: dict[str, Any]) -> Settings:
         s.tz = timezones.resolve(s.timezone)
     except timezones.TimezoneError as exc:
         raise ConfigError(f"monitor.timezone: {exc}") from exc
+    s.selftest_every_hours = max(0.0, mon.float("selftest_every_hours", s.selftest_every_hours))
+    s.control_queries = [q for q in amazon.list("control_queries", s.control_queries) if q.strip()] \
+        or list(CONTROL_QUERIES)
     s.heartbeat_url = mon.str("heartbeat_url", s.heartbeat_url)
     if s.heartbeat_url and not s.heartbeat_url.startswith(("https://", "http://")):
         raise ConfigError("monitor.heartbeat_url must be a web address starting with https://")

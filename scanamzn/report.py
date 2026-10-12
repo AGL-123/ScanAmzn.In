@@ -89,6 +89,13 @@ def describe_status_file(path: str | Path, now: datetime | None = None) -> str:
     ]
     if data.get("last_problem"):
         lines.append(f"  Last problem: {data['last_problem']}")
+    control = data.get("selftest") or {}
+    if control.get("ok") is not None:
+        at = datetime.fromisoformat(control["at"])
+        mark = "✅ passed" if control["ok"] else "❌ FAILED"
+        lines.append(f"  In-stock test: {mark} {_ago((now - at).total_seconds())}")
+        if not control["ok"]:
+            lines.append(f"                {control.get('detail', '')}")
     in_stock = [i for i in data.get("items", []) if i.get("in_stock")]
     lines.append(f"  In stock now: {len(in_stock)}")
     lines += ["", text_table(data.get("items", []))]

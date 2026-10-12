@@ -352,6 +352,7 @@ class Wizard:
         mon["timezone"] = answers["timezone"]
         mon["daily_status_hour"] = answers["daily_status_hour"]
         mon.setdefault("status_file", "~/.scanamzn/status.json")
+        mon.setdefault("debug_dump_dir", "~/.scanamzn/debug")  # pages the bot couldn't read
         mon["heartbeat_url"] = answers["heartbeat_url"]
 
         if answers["email"]:

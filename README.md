@@ -80,6 +80,7 @@ which asks for your Gmail and WhatsApp details and writes `config.toml`.
 | `test-notify` | Send a test message on every enabled channel. |
 | `check-config` | Validate the settings and show what will be watched and where alerts go. |
 | `status` | Show what the running monitor is doing (needs `monitor.status_file`). |
+| `selftest [--send]` | Check against the live site that Amazon.in is read correctly, including an in-stock reference product (see below). `--send` also sends the report. |
 | `parse FILE [--search]` | Parse a saved Amazon page, for debugging. |
 
 ### Settings from environment variables
@@ -196,6 +197,23 @@ docker run -d --name scanamzn --restart unless-stopped \
 **Windows**: run `python -m scanamzn run` in a terminal that stays open, or add
 it to Task Scheduler *at log on* with *restart on failure*. Also stop the PC from
 sleeping.
+
+## Self-test: is it really reading Amazon.in?
+
+The gift cards are nearly always out of stock, so normal running never shows the
+bot reading an *in-stock* page. `python -m scanamzn selftest` therefore checks,
+against the live site:
+
+- reachability and Amazon's guessed delivery location;
+- the search results and matching gift card listings;
+- that those product pages are understood;
+- a **positive control**: an everyday product that search shows with a price
+  (`[amazon] control_queries`) must be read as in stock.
+
+The running monitor repeats the positive control every
+`monitor.selftest_every_hours` (default 6). It warns after two failures in a
+row, and reports the last result in the daily status message and in `status`.
+Pages it could not read are saved to `monitor.debug_dump_dir`.
 
 ## Tuning
 

@@ -85,7 +85,8 @@ class FakeClock:
 def make_settings(**overrides):
     data = {
         "amazon": {"asins": [], "search_queries": []},
-        "monitor": {"interval_seconds": 30, "request_delay_seconds": [0, 0]},
+        # The in-stock self-test has its own tests; keep it out of the others.
+        "monitor": {"interval_seconds": 30, "request_delay_seconds": [0, 0], "selftest_every_hours": 0},
     }
     for section, values in overrides.items():
         data.setdefault(section, {}).update(values)

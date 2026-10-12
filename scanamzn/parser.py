@@ -218,6 +218,16 @@ def parse_product(html: str, asin: str, status_code: int = 200) -> Product:
     return product
 
 
+def delivery_location(html: str) -> str:
+    """Where Amazon thinks the visitor is ("Deliver to ..." in the page header)."""
+    soup = _soup(html)
+    for sel in ("#glow-ingress-line2", "#glow-ingress-block", "#nav-global-location-slot"):
+        text = _text(soup.select_one(sel))
+        if text:
+            return text.replace("Update location", "").strip()
+    return ""
+
+
 def parse_search(html: str, status_code: int = 200) -> SearchPage:
     """Extract result tiles (ASIN, title, price, availability) from a search page."""
     if is_blocked(html, status_code):

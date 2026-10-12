@@ -1,7 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # Control the PS5 gift card monitor on an Android phone (Termux).
 #
-#   ps5 start | stop | restart | status | test | check | setup | log | update
+#   ps5 start | stop | restart | status | test | check | setup | log | update | export
 #
 # The home-screen buttons call these same commands.
 
@@ -145,6 +145,31 @@ status() {
   fi
 }
 
+export_files() {
+  # Copy the self-test report, unreadable pages and recent log to the phone's
+  # Downloads folder, so they can be attached to a message or chat.
+  local dest="$HOME/storage/downloads/ScanAmzn" f n=0
+  if [ ! -d "$HOME/storage/downloads" ]; then
+    echo "Allow Termux to use your phone's storage in the window that opens..."
+    termux-setup-storage
+    for _ in $(seq 1 30); do [ -d "$HOME/storage/downloads" ] && break; sleep 1; done
+  fi
+  if [ ! -d "$HOME/storage/downloads" ]; then
+    echo "No access to Downloads. Run termux-setup-storage, allow it, then: ps5 export"
+    return 1
+  fi
+  mkdir -p "$dest"
+  rm -f "$dest"/*
+  [ -f "$STATE_DIR/selftest.txt" ] && cp "$STATE_DIR/selftest.txt" "$dest/" && n=$((n + 1))
+  [ -f "$LOG" ] && tail -n 400 "$LOG" >"$dest/monitor-log.txt" && n=$((n + 1))
+  for f in "$STATE_DIR"/debug/*.html; do
+    [ -f "$f" ] || continue
+    # .txt: chat apps accept text files more readily than .html
+    cp "$f" "$dest/$(basename "$f" .html).txt" && n=$((n + 1))
+  done
+  echo "Copied $n file(s) to Downloads/ScanAmzn - attach them where you were asked to."
+}
+
 install_shortcuts() {
   # Termux:Widget only accepts real files inside ~/.shortcuts (no symlinks).
   local dir="$HOME/.shortcuts" boot="$HOME/.termux/boot" ps5="$PREFIX/bin/ps5"
@@ -195,7 +220,8 @@ case "${1:-status}" in
   status) status ;;
   running) is_running ;;
   test) need_config; ensure_packages; python -m scanamzn -c "$CONFIG" test-notify ;;
-  check) need_config; ensure_packages; python -m scanamzn -c "$CONFIG" once ;;
+  check) need_config; ensure_packages; python -m scanamzn -c "$CONFIG" selftest --send ;;
+  export) export_files ;;
   setup)
     take_lock
     ensure_packages
@@ -207,7 +233,7 @@ case "${1:-status}" in
   _after-update) take_lock; after_update "${2:-0}" ;;
   install-shortcuts) install_shortcuts ;;
   *)
-    echo "usage: ps5 start|stop|restart|status|test|check|setup|log|update"
+    echo "usage: ps5 start|stop|restart|status|test|check|setup|log|update|export"
     exit 2
     ;;
 esac

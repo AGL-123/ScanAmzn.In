@@ -25,6 +25,9 @@ search_queries = [
     "playstation store gift card india",
 ]
 
+# Searches for everyday products the self-test uses as an "in stock" reference.
+control_queries = ["usb c cable", "a4 notebook", "ballpoint pen"]
+
 # "auto" uses curl_cffi (Chrome TLS fingerprint, far fewer captchas) when it is
 # installed, else plain requests.
 http_backend = "auto"
@@ -68,6 +71,9 @@ status_file = ""
 # "Dead man's switch": a URL (e.g. from https://healthchecks.io) pinged every
 # few minutes while the monitor runs, so that service can warn you if it stops.
 heartbeat_url = ""
+# Every N hours, check that an everyday in-stock product (found with
+# [amazon] control_queries) is read as in stock, and warn if it isn't. 0 disables.
+selftest_every_hours = 6
 
 
 [filter]

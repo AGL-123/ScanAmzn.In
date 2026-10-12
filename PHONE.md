@@ -205,11 +205,12 @@ an hour, healthchecks.io e-mails you, and you can tap **PS5 Start**.
 | **PS5 Status** | Is it running, when it last checked, any problems, and the status of every listing it watches. |
 | **PS5 Test alert** | Sends a test message on every channel you set up. |
 | **PS5 Settings** | Asks the setup questions again. Press Enter to keep an answer, type `-` to remove a channel. Restarts the bot with the new settings. |
-| **PS5 Check now** | Checks Amazon once right now and shows what it finds (sends no alerts). |
+| **PS5 Check now** | Self-test against the real Amazon.in: shows what it finds and whether it would see a restock, and sends the result to Telegram/e-mail (see below). |
 
 The same commands work typed in Termux: `ps5 start`, `ps5 stop`, `ps5 status`,
-`ps5 test`, `ps5 setup`, `ps5 check`, `ps5 log` (recent log lines) and
-`ps5 update` (download the latest version of the bot).
+`ps5 test`, `ps5 setup`, `ps5 check`, `ps5 log` (recent log lines),
+`ps5 update` (download the latest version of the bot) and `ps5 export` (see
+below).
 
 **What you'll receive**
 
@@ -221,6 +222,45 @@ The same commands work typed in Termux: `ps5 start`, `ps5 stop`, `ps5 status`,
 * **⚠️ ScanAmzn cannot check Amazon.in** if checks keep failing for 30 minutes
   (no internet, or Amazon showing captchas). You get **✅ … checking Amazon.in
   again** when it recovers.
+
+* **⚠️ PS5 monitor may miss restocks** if the bot's regular self-test (below)
+  fails twice in a row, and **✅ … self-test passes again** when it recovers.
+
+## Is it really working?
+
+PlayStation gift cards are almost always out of stock, so day-to-day running
+only ever shows the bot reading *"unavailable"* pages. That alone doesn't prove
+it would notice a card coming back. So the bot tests the in-stock case on the
+real site: it picks an everyday product (such as a USB cable) that Amazon.in
+shows with a price, opens its page, and checks that it reads it as **in
+stock**.
+
+**Tap PS5 Check now** (takes about half a minute). It checks:
+
+1. that Amazon.in can be reached without a captcha, and where Amazon thinks
+   you are (*delivery location*);
+2. that the searches return results and which PlayStation gift card listings
+   they found;
+3. that those gift card pages are understood (*unavailable* / *in stock*);
+4. that an in-stock product is read as **in stock** with its price.
+
+A good result ends with *"RESULT: the bot reads Amazon.in correctly and would
+see a restock"*, with ✅ on every line. The same report arrives in Telegram
+(and e-mail). Copy it from there if you want to share it.
+
+While running, the bot repeats check 4 every 6 hours. The daily *still
+running* message and **PS5 Status** show when it last passed, and you're
+warned if it fails twice in a row.
+
+**If something shows ❌:**
+
+1. Type `ps5 export` in Termux and allow storage access when asked. It copies
+   the report, the pages the bot couldn't read and the recent log into your
+   phone's **Downloads/ScanAmzn** folder.
+2. Attach those files in the chat where you got this bot, so the page reading
+   can be fixed for the real pages. They contain only Amazon's public pages and
+   the bot's log, with e-mail addresses and phone numbers masked.
+3. After a fix, `ps5 update` installs it.
 
 ## Mobile data and battery
 
