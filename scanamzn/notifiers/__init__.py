@@ -11,7 +11,8 @@ from typing import Protocol
 log = logging.getLogger(__name__)
 
 # Message kinds.
-ALERT = "alert"    # stock alerts and test messages: every channel
+ALERT = "alert"    # stock alerts: every channel
+TEST = "test"      # test messages: every channel, failures only reported
 INFO = "info"      # daily status, health warnings: spares rationed channels
 NOTICE = "notice"  # "channel X failed": never triggers further notices
 
@@ -58,7 +59,7 @@ class Dispatcher:
         self._pool = ThreadPoolExecutor(max_workers=max(2, len(notifiers) * 2), thread_name_prefix="notify")
 
     def targets(self, message: Message) -> list[Notifier]:
-        if message.kind == ALERT:
+        if message.kind in (ALERT, TEST):
             return list(self.notifiers)
         plentiful = [n for n in self.notifiers if not getattr(n, "rationed", False)]
         return plentiful or list(self.notifiers)

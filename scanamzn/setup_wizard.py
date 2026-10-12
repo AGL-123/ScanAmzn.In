@@ -6,6 +6,7 @@ hand is awkward. Running it again offers the current values as defaults.
 
 from __future__ import annotations
 
+import copy
 import getpass
 import json
 import os
@@ -24,9 +25,42 @@ _ASIN = re.compile(r"^[A-Z0-9]{10}$")
 Ask = Callable[[str], str]
 
 
-def _toml(value: Any) -> str:
-    # JSON strings and lists of strings are valid TOML basic strings/arrays.
-    return json.dumps(value, ensure_ascii=False)
+def _toml_key(key: str) -> str:
+    return key if re.fullmatch(r"[A-Za-z0-9_-]+", key) else json.dumps(key, ensure_ascii=False)
+
+
+def _toml_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return repr(value)
+    if isinstance(value, str):
+        # JSON string escapes are valid in TOML basic strings.
+        return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, list):
+        return "[" + ", ".join(_toml_value(v) for v in value) + "]"
+    if isinstance(value, dict):
+        return "{ " + ", ".join(f"{_toml_key(k)} = {_toml_value(v)}" for k, v in value.items()) + " }"
+    raise TypeError(f"cannot write {type(value).__name__} to TOML")
+
+
+def dump_toml(data: dict[str, Any]) -> str:
+    """Serialise a parsed config (tables, scalars, arrays, inline tables) back to TOML."""
+    lines: list[str] = []
+
+    def table(prefix: str, node: dict[str, Any]) -> None:
+        scalars = {k: v for k, v in node.items() if not isinstance(v, dict)}
+        tables = {k: v for k, v in node.items() if isinstance(v, dict)}
+        if prefix and (scalars or not tables):
+            lines.append(f"[{prefix}]")
+        lines.extend(f"{_toml_key(k)} = {_toml_value(v)}" for k, v in scalars.items())
+        if scalars or (prefix and not tables):
+            lines.append("")
+        for key, sub in tables.items():
+            table(f"{prefix}.{_toml_key(key)}" if prefix else _toml_key(key), sub)
+
+    table("", data)
+    return "\n".join(lines)
 
 
 def normalise_phone(raw: str, country_code: str | None = None) -> str | None:
@@ -35,7 +69,8 @@ def normalise_phone(raw: str, country_code: str | None = None) -> str | None:
     A local number (e.g. Israeli 052-123-4567) is converted with ``country_code``;
     without one, the number must already include its country code.
     """
-    number = re.sub(r"[\s\-().]", "", raw)
+    number = re.sub(r"[\s\-.]", "", raw.replace("(0)", ""))  # "+972 (0)52-..." style
+    number = re.sub(r"[()]", "", number)
     if number.startswith("00"):
         number = "+" + number[2:]
     if not number.startswith("+"):
@@ -48,6 +83,9 @@ def normalise_phone(raw: str, country_code: str | None = None) -> str | None:
             if len(local) < 7:
                 return None
             number = "+" + country_code + local
+    if country_code and number.startswith("+" + country_code + "0"):
+        # Trunk 0 kept after the country code: +972 052... -> +97252...
+        number = "+" + country_code + number[len(country_code) + 2:]
     return number if re.fullmatch(r"\+[1-9]\d{7,14}", number) else None
 
 
@@ -58,10 +96,12 @@ def phone_example(country_code: str | None) -> str:
 def data_estimate(interval: int, asins: int, queries: int = 2, search_every: int = 3,
                   max_discovered: int = 8) -> str:
     """Rough daily mobile-data use for the settings the wizard writes."""
-    # Watched listings: the ASINs given, plus what the searches find (capped).
-    pages_per_round = max(asins, min(max_discovered, 6)) + queries / search_every
+    # Each round fetches every given ASIN plus listings the searches found
+    # (typically ~6 in all, at most max_discovered more), and some searches.
+    searches = queries / search_every
     rounds_per_day = 86400 / (interval + 15)  # ~15 s of fetching per round
-    low, high = (pages_per_round * rounds_per_day * mb / 1024 for mb in (0.15, 0.3))
+    low = (max(asins, 6) + searches) * rounds_per_day * 0.15 / 1024
+    high = (asins + max_discovered + searches) * rounds_per_day * 0.3 / 1024
     return f"Estimated data use: about {low:.1f}-{high:.1f} GB a day. Use Wi-Fi if you can."
 
 
@@ -132,7 +172,11 @@ class Wizard:
                 lambda a: a.replace(" ", "") or None,
                 default=self._old("email", "password"), secret=True,
             )
-            old_to = ", ".join(self._old("email", "to", default=[]) or [gmail])
+            old_user = self._old("email", "username")
+            old_to = self._old("email", "to", default=[]) or []
+            if not old_to or old_to == [old_user] or old_user != gmail:
+                old_to = [gmail]  # the default was "yourself": follow the new address
+            old_to = ", ".join(old_to)
             to = self._prompt("   Send alerts to (comma-separated)", old_to)
             email = {"username": gmail, "password": password,
                      "to": [t.strip() for t in to.split(",") if t.strip()] or [gmail]}
@@ -140,7 +184,8 @@ class Wizard:
         out("\n3) WHATSAPP ALERTS (free CallMeBot service)")
         out(f"   Get your API key first: {CALLMEBOT_URL}")
         out("   (save their number in your contacts and send it: I allow callmebot to send me messages)")
-        old_recipient = (self._old("whatsapp", "callmebot", "recipients", default=[{}]) or [{}])[0]
+        old_recipients = self._old("whatsapp", "callmebot", "recipients", default=[]) or []
+        old_recipient = old_recipients[0] if old_recipients and isinstance(old_recipients[0], dict) else {}
         phone = self._prompt_until(
             f"   Your WhatsApp number (e.g. {phone_example(country_code)})",
             lambda a: normalise_phone(a, country_code),
@@ -189,7 +234,7 @@ class Wizard:
             hint="It should start with https://",
         )
 
-        settings = {
+        data = self.merge({
             "email": email,
             "whatsapp": whatsapp,
             "heartbeat_url": heartbeat,
@@ -197,66 +242,72 @@ class Wizard:
             "interval": int(interval),
             "timezone": zone,
             "daily_status_hour": int(daily),
-        }
-        self.write(settings)
+        })
+        if whatsapp and len(old_recipients) > 1:
+            out(f"   (The {len(old_recipients) - 1} other WhatsApp recipient(s) in the file are kept.)")
+        self.write(data)
         out(f"\nSaved {self.path}")
-        return settings
+        return data
 
     @staticmethod
     def _check_asins(answer: str) -> str | None:
         asins = [a.strip().upper() for a in answer.split(",") if a.strip()]
         return ", ".join(asins) if all(_ASIN.match(a) for a in asins) else None
 
-    def write(self, s: dict[str, Any]) -> None:
-        lines = [
-            f"# Written by `python -m scanamzn setup` on {datetime.now():%Y-%m-%d %H:%M}.",
-            "# Run setup again to change these answers. All options: config.example.toml",
-            "",
-            "[amazon]",
-            f"asins = {_toml(s['asins'])}",
-            'search_queries = ["playstation gift card", "psn wallet top up card"]',
-            "",
-            "[monitor]",
-            f"interval_seconds = {s['interval']}",
-            "# Searches cost the most data; run them every 3rd round.",
-            "search_every_cycles = 3",
-            "# Each watched listing is one page download per round.",
-            "max_discovered = 8",
-            f"timezone = {_toml(s['timezone'])}",
-            "# A short 'still running' message every day at this hour (-1 turns it off).",
-            f"daily_status_hour = {s['daily_status_hour']}",
-            'status_file = "~/.scanamzn/status.json"',
-            f"heartbeat_url = {_toml(s['heartbeat_url'])}",
-            "",
-        ]
-        if s["email"]:
-            e = s["email"]
-            lines += [
-                "[email]",
-                "enabled = true",
-                'smtp_host = "smtp.gmail.com"',
-                "smtp_port = 465",
-                'security = "ssl"',
-                f"username = {_toml(e['username'])}",
-                f"password = {_toml(e['password'])}",
-                f"to = {_toml(e['to'])}",
-                "",
-            ]
-        if s["whatsapp"]:
-            w = s["whatsapp"]
-            lines += [
-                "[whatsapp]",
-                "enabled = true",
-                'provider = "callmebot"',
-                "",
-                "[whatsapp.callmebot]",
-                f"recipients = [{{ phone = {_toml(w['phone'])}, apikey = {_toml(w['apikey'])} }}]",
-                "",
-            ]
+    def merge(self, answers: dict[str, Any]) -> dict[str, Any]:
+        """The existing config with the wizard's answers applied.
+
+        Settings the wizard doesn't ask about (filters, other mail servers,
+        extra WhatsApp recipients, ...) are kept as they are.
+        """
+        data = copy.deepcopy(self.old)
+        amazon = data.setdefault("amazon", {})
+        amazon["asins"] = answers["asins"]
+        amazon.setdefault("search_queries", ["playstation gift card", "psn wallet top up card"])
+
+        mon = data.setdefault("monitor", {})
+        mon["interval_seconds"] = answers["interval"]
+        mon.setdefault("search_every_cycles", 3)  # searches cost the most data
+        mon.setdefault("max_discovered", 8)  # each listing is a page per round
+        mon["timezone"] = answers["timezone"]
+        mon["daily_status_hour"] = answers["daily_status_hour"]
+        mon.setdefault("status_file", "~/.scanamzn/status.json")
+        mon["heartbeat_url"] = answers["heartbeat_url"]
+
+        if answers["email"]:
+            email = data.setdefault("email", {})
+            email.update(enabled=True, **answers["email"])
+            email.setdefault("smtp_host", "smtp.gmail.com")
+            email.setdefault("smtp_port", 465)
+            email.setdefault("security", "ssl")
+        elif isinstance(data.get("email"), dict):
+            data["email"]["enabled"] = False
+
+        if answers["whatsapp"]:
+            whatsapp = data.setdefault("whatsapp", {})
+            whatsapp.update(enabled=True, provider="callmebot")
+            callmebot = whatsapp.setdefault("callmebot", {})
+            recipients = list(callmebot.get("recipients") or [])
+            if recipients:
+                recipients[0] = answers["whatsapp"]
+            else:
+                recipients = [answers["whatsapp"]]
+            callmebot["recipients"] = recipients
+        elif isinstance(data.get("whatsapp"), dict):
+            data["whatsapp"]["enabled"] = False
+        return data
+
+    def write(self, data: dict[str, Any]) -> None:
+        text = (
+            f"# Written by `python -m scanamzn setup` on {datetime.now():%Y-%m-%d %H:%M}.\n"
+            "# Run setup again to change these answers (comments here are not kept).\n"
+            "# All options are explained in config.example.toml.\n\n" + dump_toml(data)
+        )
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_name(self.path.name + ".tmp")
         # The file holds passwords: readable by this user only.
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write("\n".join(lines))
+            fh.write(text)
+        os.chmod(tmp, 0o600)  # also if the .tmp file already existed
         os.replace(tmp, self.path)

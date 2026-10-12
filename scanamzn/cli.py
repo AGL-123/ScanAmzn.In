@@ -15,7 +15,7 @@ from . import __version__
 from .config import ConfigError, Settings, build_notifiers, load
 from .fetcher import FetchError, Fetcher
 from .monitor import Monitor, format_inr, shorten
-from .notifiers import Dispatcher, Message, Notifier
+from .notifiers import TEST, Dispatcher, Message, Notifier
 from .parser import parse_product, parse_search
 from .report import describe_status_file, text_table
 
@@ -84,7 +84,34 @@ def cmd_check_config(args: argparse.Namespace, s: Settings) -> int:
     return 0
 
 
+def _single_instance_lock(s: Settings):
+    """Hold a lock next to the status file so two monitors never run at once.
+
+    Returns the open lock file (keep it), None when locking isn't possible
+    here, or False when another monitor holds the lock.
+    """
+    if not s.status_file:
+        return None
+    try:
+        import fcntl
+    except ImportError:  # Windows
+        return None
+    path = Path(s.status_file).with_suffix(".lock")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = open(path, "w")  # noqa: SIM115 - held for the life of the process
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        return False
+    return handle
+
+
 def cmd_run(args: argparse.Namespace, s: Settings) -> int:
+    lock = _single_instance_lock(s)
+    if lock is False:
+        log.error("another monitor is already running with this status file - not starting a second one")
+        return 3
     notifiers = [] if args.dry_run else build_notifiers(s)
     if not notifiers and not args.dry_run:
         log.error("no notification channel is enabled - set up e-mail and/or WhatsApp first")
@@ -180,6 +207,7 @@ def cmd_test_notify(args: argparse.Namespace, s: Settings) -> int:
             f"Example product link: https://{s.domain}/dp/B000000000"
         ),
         summary="ScanAmzn test notification - alerts on this channel work.",
+        kind=TEST,
     )
     try:
         results = dispatcher.send_and_wait(message)
@@ -212,8 +240,11 @@ def cmd_setup(args: argparse.Namespace) -> int:
     answer = input("\nSend a test alert now? [Y/n]: ").strip().lower()
     if answer in ("", "y", "yes"):
         settings = load(path)
-        _setup_logging(args.verbose, "")
-        return cmd_test_notify(args, settings)
+        _setup_logging(args.verbose, "", settings.tz)
+        if cmd_test_notify(args, settings) != 0:
+            # The settings are saved either way; a CallMeBot key can take a
+            # few minutes to start working.
+            print("The settings were saved. Fix the failed channel with setup, or test again later.")
     return 0
 
 

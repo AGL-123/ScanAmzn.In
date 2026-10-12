@@ -128,6 +128,7 @@ class Monitor:
             len(self.s.asins), len(self.s.search_queries), self.s.domain, self.s.interval_seconds,
         )
         deadline = self.clock() + max_runtime_seconds if max_runtime_seconds else math.inf
+        self.write_status_file()  # "starting": the first round can take a while
         while not self._stop.is_set():
             started = self.clock()
             try:
@@ -306,6 +307,10 @@ class Monitor:
             return
         self._mark_success()
         if product.status is Status.NOT_FOUND:
+            # Shown in the status and daily message; stock state is left alone
+            # because a one-off 404 says nothing about availability.
+            self.items.setdefault(product.asin, ItemState(product.asin)).status = Status.NOT_FOUND
+            self.last_problem = f"{product.asin}: product page not found - check the ASIN"
             log.warning("%s: product page not found - check the ASIN", product.asin)
             return
 
@@ -456,11 +461,13 @@ class Monitor:
             lines.append(f"⚠️ Checks are currently failing: {self.last_problem}")
         lines += ["", f"Watching {len(watched)} listing(s):"]
         for item in watched[:15]:
-            status = item.status or "not checked yet"
+            status = {Status.NOT_FOUND: "page not found (check the ASIN)"}.get(item.status, item.status)
+            status = status or "not checked yet"
             lines.append(f"• {shorten(item.title or item.asin, 60)}: {status}")
         if len(watched) > 15:
             lines.append(f"• …and {len(watched) - 15} more")
-        lines += ["", f"Next status message: {self._next_daily_status(now):%d %b, %H:%M}."]
+        if (upcoming := self._next_daily_status(now)) is not None:
+            lines += ["", f"Next status message: {upcoming:%d %b, %H:%M}."]
         state = f"{len(in_stock)} in stock now" if in_stock else "nothing in stock right now"
         return Message(
             subject=f"✅ PS5 gift card monitor is running ({state})",

@@ -350,3 +350,33 @@ def test_no_heartbeat_without_url(fetcher, dispatcher, clock):
     m = Monitor(make_settings(**watching()), fetcher, dispatcher, clock=clock, pinger=pings.append)
     m._heartbeat()
     assert pings == []
+
+
+def test_status_file_written_before_first_cycle(fetcher, dispatcher, clock, tmp_path):
+    import json
+
+    path = tmp_path / "status.json"
+    m = make_monitor(fetcher, dispatcher, clock, **watching(status_file=str(path)))
+    seen = {}
+
+    def first_cycle():
+        seen.update(json.loads(path.read_text()))  # what `status` shows during round 1
+        m.stop()
+        from scanamzn.monitor import CycleReport
+
+        return CycleReport()
+
+    m.run_cycle = first_cycle
+    m.run_forever()
+    assert seen["cycle"] == 0 and seen["pid"] > 0
+
+
+def test_not_found_asin_is_shown_and_reported(fetcher, dispatcher, clock):
+    m = make_monitor(fetcher, dispatcher, clock, **watching(asins=("B0TYPO0000",)))
+    m.run_cycle()  # FakeFetcher answers unknown URLs with Amazon's 404 page
+    assert m.items["B0TYPO0000"].status is Status.NOT_FOUND
+    assert "check the ASIN" in m.last_problem
+    assert m.snapshot()["items"][0]["status"] == "not_found"
+    from datetime import datetime
+
+    assert "page not found (check the ASIN)" in m.daily_status_message(datetime.now()).body

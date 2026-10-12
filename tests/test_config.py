@@ -72,3 +72,9 @@ def test_whatsapp_misconfiguration():
         build_notifiers(from_dict({"whatsapp": {"enabled": True, "provider": "meta", "meta": {}}}))
     with pytest.raises(ConfigError, match="required"):
         build_notifiers(from_dict({"whatsapp": {"enabled": True, "provider": "meta", "meta": {"to": ["91"]}}}))
+
+
+def test_wrong_type_error_hides_secret_values():
+    with pytest.raises(ConfigError) as info:
+        build_notifiers(from_dict({"email": {"enabled": True, "password": 123456789}}))
+    assert "123456789" not in str(info.value) and "(hidden)" in str(info.value)

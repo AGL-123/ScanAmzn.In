@@ -1,21 +1,24 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # Control the PS5 gift card monitor on an Android phone (Termux).
 #
-#   ps5 start | stop | restart | status | test | setup | log | update
+#   ps5 start | stop | restart | status | test | check | setup | log | update
 #
-# The home-screen buttons created by install.sh call these same commands.
+# The home-screen buttons call these same commands.
 
 # Widget buttons and boot scripts may run with a minimal environment.
 PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
 export PATH="$PREFIX/bin:$PATH" PYTHONUNBUFFERED=1
+umask 077 # logs and status stay private to Termux
 
 APP_DIR="${SCANAMZN_DIR:-$HOME/ScanAmzn.In}"
 CONFIG="$APP_DIR/config.toml"
 STATE_DIR="$HOME/.scanamzn"
 PIDFILE="$STATE_DIR/monitor.pid"
 LOG="$STATE_DIR/monitor.log"
+LOCK="$STATE_DIR/lock"
 # Present while the user wants the monitor on; the boot script checks it.
 ENABLED="$STATE_DIR/enabled"
+PACKAGES="requests beautifulsoup4 tzdata"
 
 mkdir -p "$STATE_DIR"
 cd "$APP_DIR" 2>/dev/null || { echo "ScanAmzn is not installed in $APP_DIR - run install.sh first."; exit 1; }
@@ -26,11 +29,40 @@ say() {
   command -v termux-toast >/dev/null 2>&1 && termux-toast "$1" >/dev/null 2>&1 &
 }
 
+take_lock() {
+  # Only one start/stop/update at a time (e.g. a double-tapped button, or a
+  # tap racing the boot script), so two monitors can never be launched.
+  local holder empty=0
+  for _ in $(seq 1 30); do
+    if mkdir "$LOCK" 2>/dev/null; then
+      echo $$ >"$LOCK/pid"
+      trap 'rm -rf "$LOCK"' EXIT
+      return 0
+    fi
+    holder="$(cat "$LOCK/pid" 2>/dev/null)"
+    if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
+      rm -rf "$LOCK" # left behind by a ps5 that was killed
+      continue
+    fi
+    [ -z "$holder" ] && empty=$((empty + 1))
+    if [ "$empty" -ge 5 ]; then
+      rm -rf "$LOCK" # killed between creating the lock and writing its pid
+      continue
+    fi
+    sleep 1
+  done
+  echo "Another ps5 command is still busy - try again in a minute."
+  exit 1
+}
+
 ensure_packages() {
   # A Termux Python upgrade (e.g. 3.13 -> 3.14) drops pip-installed packages.
-  python -c "import requests, bs4, tzdata" 2>/dev/null && return 0
-  echo "Re-installing Python packages after a Termux update..."
-  python -m pip install -q requests beautifulsoup4 tzdata
+  if [ "${1:-}" != "--upgrade" ] && python -c "import requests, bs4, tzdata" 2>/dev/null; then
+    return 0
+  fi
+  echo "Installing Python packages..."
+  # shellcheck disable=SC2086
+  python -m pip install -q --upgrade $PACKAGES
 }
 
 is_running() {
@@ -40,7 +72,8 @@ is_running() {
 need_config() {
   if [ ! -f "$CONFIG" ]; then
     echo "Not set up yet. Running setup first..."
-    python -m scanamzn -c "$CONFIG" setup </dev/tty || exit 1
+    python -m scanamzn -c "$CONFIG" setup </dev/tty || true
+    [ -f "$CONFIG" ] || exit 1
   fi
 }
 
@@ -52,15 +85,15 @@ start() {
   need_config
   ensure_packages
   touch "$ENABLED"
-  python -m scanamzn -c "$CONFIG" check-config >/dev/null 2>"$STATE_DIR/check.err" || {
+  python -m scanamzn -c "$CONFIG" check-config >"$STATE_DIR/check.out" 2>&1 || {
     say "Settings problem - run: ps5 setup"
-    cat "$STATE_DIR/check.err"
+    cat "$STATE_DIR/check.out"
     return 1
   }
-  # Keep the CPU awake while the screen is off (releases with `ps5 stop`).
+  # Keep the CPU awake while the screen is off (released by `ps5 stop`).
   termux-wake-lock 2>/dev/null || true
-  # Start in a new session so it survives closing this window.
   [ -f "$LOG" ] && [ "$(wc -c <"$LOG")" -gt 5000000 ] && mv -f "$LOG" "$LOG.old"
+  # Start in a new session so it survives closing this window.
   python - "$CONFIG" "$LOG" "$PIDFILE" <<'PY'
 import subprocess, sys
 config, log, pidfile = sys.argv[1:4]
@@ -112,30 +145,67 @@ status() {
   fi
 }
 
+install_shortcuts() {
+  # Termux:Widget only accepts real files inside ~/.shortcuts (no symlinks).
+  local dir="$HOME/.shortcuts" boot="$HOME/.termux/boot" ps5="$PREFIX/bin/ps5"
+  local pause='echo; read -r -p "Press Enter to close " _'
+  mkdir -p "$dir" "$boot"
+  shortcut() { # name, command
+    rm -f "$dir/$1"
+    printf '#!/data/data/com.termux/files/usr/bin/bash\n%s\n' "$2" >"$dir/$1"
+    chmod 700 "$dir/$1"
+  }
+  shortcut "PS5 Start" "\"$ps5\" start; sleep 6"
+  shortcut "PS5 Stop" "\"$ps5\" stop; sleep 3"
+  shortcut "PS5 Status" "\"$ps5\" status; $pause"
+  shortcut "PS5 Test alert" "\"$ps5\" test; $pause"
+  shortcut "PS5 Settings" "\"$ps5\" setup; $pause"
+  shortcut "PS5 Check now" "\"$ps5\" check; $pause"
+  chmod 700 "$dir"
+  # Restart after the phone reboots (Termux:Boot), if the monitor was on.
+  rm -f "$boot/ps5-monitor"
+  printf '#!/data/data/com.termux/files/usr/bin/sh\n"%s" boot\n' "$ps5" >"$boot/ps5-monitor"
+  chmod 700 "$boot/ps5-monitor"
+}
+
 update() {
   local was_running=0
   is_running && was_running=1
+  # A locally changed ps5 (e.g. from an old installer bug) would block the pull.
+  git diff --quiet -- termux/ps5 2>/dev/null || git checkout -- termux/ps5
   git pull --ff-only || { echo "Update failed (see above)."; return 1; }
-  python -m pip install -q --upgrade requests beautifulsoup4 tzdata
-  if [ "$was_running" = 1 ]; then stop; start; fi
+  # Finish with the freshly downloaded version of this script.
+  rm -rf "$LOCK"
+  trap - EXIT
+  exec "$APP_DIR/termux/ps5" _after-update "$was_running"
+}
+
+after_update() {
+  ensure_packages --upgrade
+  install_shortcuts
+  if [ "${1:-0}" = 1 ]; then stop; start; fi
   say "PS5 monitor updated."
 }
 
 case "${1:-status}" in
-  start) start ;;
-  boot) if [ -f "$ENABLED" ]; then start; fi ;;
-  stop) stop ;;
-  restart) stop; start ;;
+  start) take_lock; start ;;
+  boot) take_lock; if [ -f "$ENABLED" ]; then start; fi ;;
+  stop) take_lock; stop ;;
+  restart) take_lock; stop; start ;;
   status) status ;;
+  running) is_running ;;
   test) need_config; ensure_packages; python -m scanamzn -c "$CONFIG" test-notify ;;
   check) need_config; ensure_packages; python -m scanamzn -c "$CONFIG" once ;;
   setup)
+    take_lock
     ensure_packages
     python -m scanamzn -c "$CONFIG" setup </dev/tty
-    is_running && { echo "Restarting with the new settings..."; stop; start; }
+    if is_running; then echo "Restarting with the new settings..."; stop; start; fi
     ;;
   log) tail -n "${2:-40}" "$LOG" ;;
-  update) update ;;
+  update) take_lock; update ;;
+  _after-update) take_lock; after_update "${2:-0}" ;;
+  install-shortcuts) install_shortcuts ;;
   *)
     echo "usage: ps5 start|stop|restart|status|test|check|setup|log|update"
     exit 2

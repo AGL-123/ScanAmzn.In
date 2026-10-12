@@ -51,3 +51,11 @@ def test_status_failing(tmp_path):
 
 def test_status_missing_file(tmp_path):
     assert "has not run yet" in describe_status_file(tmp_path / "nope.json")
+
+
+def test_status_starting(tmp_path):
+    assert "STARTING" in _status(tmp_path, cycle=0)
+
+
+def test_not_found_label():
+    assert "check the ASIN" in text_table([{"asin": "B0X", "status": "not_found", "price": None}])

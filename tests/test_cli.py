@@ -80,3 +80,33 @@ def test_missing_config_message(tmp_path, monkeypatch, capsys):
         monkeypatch.delenv(key)
     assert main(["once"]) == 2
     assert "setup" in capsys.readouterr().out
+
+
+def test_single_instance_lock(tmp_path):
+    from scanamzn.cli import _single_instance_lock
+    from scanamzn.config import from_dict
+
+    s = from_dict({"monitor": {"status_file": str(tmp_path / "status.json")}})
+    first = _single_instance_lock(s)
+    assert first not in (None, False)
+    # flock locks belong to the open file, so a second open in the same
+    # process conflicts just like a second process would.
+    assert _single_instance_lock(s) is False
+    first.close()
+    again = _single_instance_lock(s)
+    assert again not in (None, False)
+    again.close()
+    assert _single_instance_lock(from_dict({})) is None  # no status file: no lock
+
+
+def test_run_refuses_second_instance(env, monkeypatch, tmp_path):
+    from scanamzn.cli import _single_instance_lock
+    from scanamzn.config import from_dict
+
+    status = tmp_path / "s" / "status.json"
+    monkeypatch.setenv("SCANAMZN_STATUS_FILE", str(status))
+    held = _single_instance_lock(from_dict({"monitor": {"status_file": str(status)}}))
+    try:
+        assert main(["run", "--dry-run"]) == 3
+    finally:
+        held.close()

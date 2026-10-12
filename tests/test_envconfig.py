@@ -28,9 +28,11 @@ def test_missing_file_and_no_env_is_an_error(tmp_path):
 
 
 def test_empty_values_are_ignored(tmp_path):
-    # GitHub turns secrets that were never created into empty strings.
+    # Docker/CI tooling often passes unset secrets as empty strings.
+    cfg = tmp_path / "config.toml"
+    cfg.write_text("")
     env = {name: "" for name in ALL_NAMES} | {"SCANAMZN_ASINS": "b0abcdefgh, B0ABCDEFGJ"}
-    s = load(tmp_path / "missing.toml", environ=env)
+    s = load(cfg, environ=env)
     assert s.asins == ["B0ABCDEFGH", "B0ABCDEFGJ"]
     assert build_notifiers(s) == []
 
@@ -91,3 +93,11 @@ def test_twilio_and_meta_from_env():
 
 def test_merge_is_deep():
     assert merge({"a": {"x": 1, "y": 2}, "b": 1}, {"a": {"y": 3}}) == {"a": {"x": 1, "y": 3}, "b": 1}
+
+
+def test_missing_file_with_only_placeholder_secrets_says_file_not_found(tmp_path):
+    # README quick start: secrets exported for ${...} placeholders, but a wrong -c path.
+    with pytest.raises(ConfigError, match="missing.toml not found"):
+        load(tmp_path / "missing.toml", environ={"SCANAMZN_SMTP_PASSWORD": "pw"})
+    with pytest.raises(ConfigError, match="missing.toml not found.*incomplete"):
+        load(tmp_path / "missing.toml", environ={"SCANAMZN_CALLMEBOT_APIKEY": "1"})

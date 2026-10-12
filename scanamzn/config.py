@@ -86,7 +86,9 @@ class _Section:
         if kind is float and isinstance(value, int) and not isinstance(value, bool):
             value = float(value)
         if not isinstance(value, kind) or (kind is int and isinstance(value, bool)):
-            raise ConfigError(f"{self.path}.{key} has the wrong type: {value!r}")
+            secret = re.search(r"password|apikey|token|secret", key, re.I)
+            shown = "(hidden)" if secret else repr(value)
+            raise ConfigError(f"{self.path}.{key} has the wrong type: {shown}")
         return value
 
     def str(self, key: str, default: str = "") -> str:
@@ -162,16 +164,22 @@ def load(path: str | Path, environ: Mapping[str, str] | None = None) -> Settings
             data = tomllib.loads(path.read_text(encoding="utf-8"))
         except tomllib.TOMLDecodeError as exc:
             raise ConfigError(f"{path}: {exc}") from exc
+    missing = (
+        f"config file {path} not found: copy config.example.toml to {path.name}, "
+        "run `python -m scanamzn setup`, or set SCANAMZN_* environment variables"
+    )
     try:
         env = envconfig.overlay(environ, data)
     except envconfig.EnvConfigError as exc:
+        if not path.exists():
+            raise ConfigError(f"{missing} (the environment variables set are incomplete: {exc})") from exc
         raise ConfigError(str(exc)) from exc
     if not path.exists():
-        if not env:
-            raise ConfigError(
-                f"config file {path} not found: copy config.example.toml to {path.name}, "
-                "run `python -m scanamzn setup`, or set SCANAMZN_* environment variables"
-            )
+        # Without a file, the environment must describe at least one alert
+        # channel; otherwise a mistyped -c path would silently run on defaults.
+        email = env.get("email", {})
+        if not ((email.get("username") and email.get("password")) or "whatsapp" in env):
+            raise ConfigError(missing)
         log.debug("no config file at %s; using SCANAMZN_* environment variables", path)
     return from_dict(envconfig.merge(data, env))
 

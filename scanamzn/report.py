@@ -13,6 +13,7 @@ _STATUS_ICON = {
     "available": "🟢 in stock",
     "overpriced": "🟠 overpriced",
     "unavailable": "⚪ unavailable",
+    "not_found": "❌ page not found (check the ASIN)",
     None: "… not checked yet",
 }
 
@@ -72,6 +73,8 @@ def describe_status_file(path: str | Path, now: datetime | None = None) -> str:
     alive = _pid_alive(data.get("pid"))
     if alive is False or age > max(expected, 15 * 60):
         state = "🔴 NOT RUNNING (last check " + _ago(age) + ")"
+    elif not data.get("cycle"):
+        state = "🟡 STARTING (first check in progress)"
     elif data.get("checks_failing"):
         state = "🟠 RUNNING, but checks are failing"
     else:

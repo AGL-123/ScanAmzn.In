@@ -241,3 +241,14 @@ def test_failed_alert_is_reported_on_the_other_channels():
     assert subjects[0] == "🎮 IN STOCK: PSN ₹1000"
     assert subjects[1] == "⚠️ whatsapp/callmebot could not deliver an alert"
     assert "account is paused" in email.sent[1].body and "Buy: link" in email.sent[1].body
+
+
+def test_failed_test_message_does_not_spawn_notices():
+    from scanamzn.notifiers import TEST
+
+    email, whatsapp = Named("email", False), Named("whatsapp/callmebot", True, fail=True)
+    d = Dispatcher([email, whatsapp], retries=1, retry_delay=0)
+    results = d.send_and_wait(Message("test", "b", "s", kind=TEST))
+    d.close()
+    assert [(n.name, ok) for n, ok in results] == [("email", True), ("whatsapp/callmebot", False)]
+    assert [m.subject for m in email.sent] == ["test"]

@@ -216,8 +216,12 @@ phone on the charger if you can.
   too when you browse Amazon on the same Wi-Fi.
 * **Buttons don't appear in the widget**: open Termux once, then tap the
   widget's refresh icon. Termux and its add-ons must come from the same store.
-* **Something else**: `ps5 log` shows the last log lines, and `ps5 update`
-  fetches the newest version of the bot.
+* **Something else**: `ps5 log` shows the last log lines.
+
+**Updating the bot**: type `ps5 update` in Termux (or paste the install line
+from Step 3 again). It downloads the newest version, refreshes the buttons and
+restarts the monitor if it was running. Your settings are kept, and **PS5
+Settings** only changes what it asks about.
 
 ## No Android phone?
 
