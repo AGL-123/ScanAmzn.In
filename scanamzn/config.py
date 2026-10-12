@@ -50,6 +50,8 @@ MORE_LISTINGS = {
     "B0CYP5X177": "Rs.8000 Sony PlayStation Store Gift Card",
     "B0CYP97QKQ": "Rs.12000 Sony PlayStation Network Wallet Top-Up",
     "B07K6PVXJZ": "Rs.500 Sony PlayStation Network Wallet Top-Up",
+    "B0B3D62Q66": "Rs.1200 Sony PlayStation Store Gift Card",
+    "B07K6PVR8B": "Rs.3000 Sony PlayStation Network Wallet Top-Up",
     "B07K6QB4NR": "Rs.2500 Sony PlayStation Network Wallet Top-Up",
     "B083V34M47": "Rs.3500 Sony PlayStation Network Wallet Top-Up (Pay On Delivery)",
     "B0B4B88S9V": "PlayStation Network Wallet Top-Up 4500",

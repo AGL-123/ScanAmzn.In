@@ -231,6 +231,27 @@ below).
 * **⚠️ PS5 monitor may miss restocks** if the bot's regular self-test (below)
   fails twice in a row, and **✅ … self-test passes again** when it recovers.
 
+## Be ready to buy
+
+A restock is usually gone within minutes, so sort these out **before** the
+first alert:
+
+* Stay signed in to the **Amazon.in** app (or amazon.in in your browser) on
+  this phone, so the alert's *Buy* link opens straight into checkout.
+* The cards are for **adult PSN accounts registered to India** (the listing
+  says so).
+* **Check that you can pay.** Amazon.in's gift card help pages say cards
+  issued outside India are not accepted for Amazon Pay gift cards. It isn't
+  clear whether that also applies to these PlayStation codes, so make sure a
+  payment method that works on Amazon.in is ready (for example Amazon Pay
+  balance, an Indian card or UPI) - try a small digital purchase first if
+  you're unsure.
+* When cards are back, the most a seller usually charges is face value or a
+  few percent more. Listings priced more than 10% above the value printed in
+  their title are skipped as *overpriced*. If you'd pay more, raise
+  `max_markup_percent` in the `[filter]` section of the settings file
+  (`nano ~/ScanAmzn.In/config.toml` in Termux), then `ps5 restart`.
+
 ## Is it really working?
 
 PlayStation gift cards are almost always out of stock, so day-to-day running

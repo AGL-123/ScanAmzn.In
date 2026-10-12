@@ -32,10 +32,17 @@ _BLOCK_MARKERS = (
     "make sure you&#39;re not a robot",
     "api-services-support@amazon.com",
     "to discuss automated access to amazon data",
-    # AWS WAF JavaScript challenge / CAPTCHA (normally HTTP 202 / 405).
+    # AWS WAF JavaScript challenge / CAPTCHA (normally HTTP 202 / 405, but
+    # also seen with 200): its scripts come from *.token.awswaf.com,
+    # captcha.awswaf.com or captcha-sdk.awswaf.com.
     "awswafcookiedomainlist",
     "awswafintegration",
-    ".token.awswaf.com",
+    "gokuprops",
+    ".awswaf.com",
+    # Amazon's "Sorry! Something went wrong" throttle page, and Akamai's
+    # bot-check interstitial (used by some Amazon storefronts).
+    "ref=cs_503",
+    "/_sec/verify",
 )
 _NOT_FOUND_MARKER = "the web address you entered is not a functioning page"
 # Present only on real pages; a page carrying one is never a robot/404 page.
@@ -142,8 +149,8 @@ def _price_of(el: Tag) -> float | None:
 
 def is_blocked(html: str, status_code: int = 200) -> bool:
     """True for captcha / robot-check / throttling responses."""
-    # 202 is Amazon's (AWS WAF) JavaScript bot challenge; real pages are 200.
-    if status_code in (202, 429, 503):
+    # 202 / 405 are AWS WAF's JavaScript challenge / CAPTCHA; real pages are 200.
+    if status_code in (202, 405, 429, 503):
         return True
     if any(marker in html for marker in _REAL_PAGE_MARKERS):
         return False

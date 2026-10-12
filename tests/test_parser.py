@@ -145,3 +145,16 @@ def test_aws_waf_challenge_page_is_blocked_whatever_the_status():
     assert parse_search(page, 200).blocked
     assert not is_product_page(page)
     assert is_product_page(product_html("x", available=False))
+
+
+def test_other_amazon_walls_are_blocked():
+    captcha_405 = '<html><head><title>Human Verification</title><script src="https://captcha.awswaf.com/x/jsapi.js"></script></head></html>'
+    throttle = '<html><body>Sorry! Something went wrong! <a href="/ref=cs_503_link">Go to the Amazon.in home page</a></body></html>'
+    akamai = '<html><head><meta http-equiv="refresh" content="5; URL=/_sec/verify?provider=interstitial"></head></html>'
+    assert is_blocked(captcha_405, 405) and is_blocked(captcha_405, 200)
+    assert is_blocked(throttle, 200) and is_blocked(akamai, 200)
+    # Real pages never count as blocked, whatever scripts they load.
+    real = product_html("x", available=True).replace("</body>", '<script src="https://a.token.awswaf.com/sdk.js"></script></body>')
+    assert not is_blocked(real, 200)
+    for name in ("product_available.html", "product_unavailable.html", "product_other_sellers.html", "search_results.html"):
+        assert not is_blocked(fixture(name), 200), name
