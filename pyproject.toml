@@ -11,11 +11,13 @@ requires-python = ">=3.11"
 dependencies = [
     "requests>=2.31",
     "beautifulsoup4>=4.12",
-    "lxml>=5.0",
-    "curl_cffi>=0.7",
 ]
 
 [project.optional-dependencies]
+# Strongly recommended wherever wheels exist (PC, Docker, GitHub Actions): Chrome
+# TLS impersonation gets far fewer captchas, lxml parses faster. Phones (Termux)
+# run fine without them.
+fast = ["lxml>=5.0", "curl_cffi>=0.7"]
 dev = ["pytest>=8"]
 
 [project.scripts]

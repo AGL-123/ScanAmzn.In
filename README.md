@@ -6,6 +6,9 @@ unavailable* almost all the time and sell out within minutes of a restock. When
 one becomes buyable, the bot sends you an **e-mail** and a **WhatsApp message**
 right away, with a direct product link and a one-click *add to cart* link.
 
+> **📱 No PC? Run it on your Android phone:** follow **[PHONE.md](PHONE.md)**.
+> One install command, then home-screen buttons to start, stop and check it.
+
 ## How it works
 
 Every ~45 seconds (randomised), the bot:
@@ -59,15 +62,39 @@ python -m scanamzn run             # monitor until stopped (Ctrl+C)
 `config.toml`. Product pages are the most reliable signal, so watch the exact
 denominations you want. The searches still pick up new listings.
 
+Instead of editing the file by hand you can run `python -m scanamzn setup`,
+which asks for your Gmail and WhatsApp details and writes `config.toml`.
+
 ### Commands
 
 | Command | What it does |
 |---|---|
-| `run` | Monitor continuously. `--dry-run` logs alerts instead of sending them. |
+| `setup` | Answer a few questions to create (or change) `config.toml`. |
+| `run` | Monitor continuously. `--dry-run` logs alerts instead of sending them; `--max-runtime 5.5h` stops after that long. |
 | `once` | One check cycle with a status table. `--notify` really sends alerts. |
 | `discover` | Run the search queries and show which listings match the filter. |
 | `test-notify` | Send a test message on every enabled channel. |
+| `check-config` | Validate the settings and show what will be watched and where alerts go. |
+| `status` | Show what the running monitor is doing (needs `monitor.status_file`). |
 | `parse FILE [--search]` | Parse a saved Amazon page, for debugging. |
+
+### Settings from environment variables
+
+Every important setting can also come from a `SCANAMZN_*` environment
+variable. Environment variables override `config.toml`, and with them the config
+file is optional. That is handy for Docker (`--env-file`) and cloud servers.
+
+| Variable | Meaning |
+|---|---|
+| `SCANAMZN_SMTP_USER`, `SCANAMZN_SMTP_PASSWORD` | Gmail address and app password (turns e-mail alerts on; alerts go to that address unless `SCANAMZN_EMAIL_TO` is set) |
+| `SCANAMZN_WHATSAPP_PHONE`, `SCANAMZN_CALLMEBOT_APIKEY` | WhatsApp number(s) and CallMeBot key(s), comma-separated, in the same order |
+| `SCANAMZN_ASINS` | ASINs to watch, comma-separated |
+| `SCANAMZN_SEARCH_QUERIES` | search queries separated by `;` |
+| `SCANAMZN_INTERVAL_SECONDS`, `SCANAMZN_DAILY_STATUS_HOUR`, `SCANAMZN_MAX_MARKUP_PERCENT`, `SCANAMZN_MAX_PRICE`, `SCANAMZN_NOTIFY_WHEN_SOLD_OUT`, `SCANAMZN_STATUS_FILE` | same as the config keys |
+| `SCANAMZN_SMTP_HOST` / `_PORT` / `_SECURITY`, `SCANAMZN_EMAIL_FROM`, `SCANAMZN_EMAIL_TO` | other mail servers |
+| `SCANAMZN_TWILIO_ACCOUNT_SID` / `_AUTH_TOKEN` / `_FROM` / `_CONTENT_SID`, `SCANAMZN_META_TOKEN` / `_PHONE_NUMBER_ID` / `_TEMPLATE` | Twilio or Meta instead of CallMeBot (with `SCANAMZN_WHATSAPP_PHONE`) |
+
+Empty variables are ignored. The full list is in `scanamzn/envconfig.py`.
 
 Global options: `-c config.toml` (config path) and `-v` (debug logging).
 
@@ -104,11 +131,15 @@ Run `python -m scanamzn test-notify` after any change.
 
 ## Running it 24/7
 
-The bot only helps while it's running. Run it on an always-on machine with a
-residential **Indian internet connection**: a home PC, a Raspberry Pi or a NAS.
-Amazon is much quicker to show captchas to cloud/datacenter IPs. GitHub Actions
-and similar schedulers are not suitable: their cron runs are throttled to every
-5+ minutes, often run late, and come from blocked IP ranges.
+The bot only helps while it's running. Run it on an always-on device with a
+residential **Indian internet connection**: an **Android phone**
+([PHONE.md](PHONE.md)), a home PC, a Raspberry Pi or a NAS. Amazon is much
+quicker to show captchas to cloud/datacenter IPs.
+
+GitHub Actions is not suitable. GitHub's terms only allow Actions for building,
+testing and deploying the repository's own software, so a 24/7 monitor there
+risks your account. Its cron runs are also throttled and often late, and Amazon
+blocks many of its IP ranges.
 
 **systemd (Linux / Raspberry Pi)**: `/etc/systemd/system/scanamzn.service`:
 

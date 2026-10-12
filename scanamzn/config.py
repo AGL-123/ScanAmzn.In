@@ -12,10 +12,12 @@ import logging
 import os
 import re
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from . import envconfig
 from .filters import TitleFilter
 from .notifiers import Notifier, NotifyError
 from .notifiers.email import EmailNotifier
@@ -126,6 +128,10 @@ class Settings:
     max_backoff_seconds: float = 900.0
     debug_dump_dir: str = ""
     log_file: str = ""
+    # Hour of day (IST, 0-23) for a daily "still running" message; -1 disables.
+    daily_status_hour: int = -1
+    # JSON file updated after every cycle, read by `scanamzn status`.
+    status_file: str = ""
     # [filter]
     title_filter: TitleFilter = field(
         default_factory=lambda: TitleFilter(DEFAULT_REQUIRE_ANY, DEFAULT_EXCLUDE)
@@ -136,15 +142,31 @@ class Settings:
     raw: _Section = field(default_factory=lambda: _Section({}, ""))
 
 
-def load(path: str | Path) -> Settings:
-    path = Path(path)
-    if not path.exists():
-        raise ConfigError(f"config file {path} not found (copy config.example.toml to start)")
+def load(path: str | Path, environ: Mapping[str, str] | None = None) -> Settings:
+    """Read the config file, overlaid with any SCANAMZN_* environment variables.
+
+    The file is optional when the environment provides the settings.
+    """
+    environ = os.environ if environ is None else environ
+    path = Path(path).expanduser()
+    data: dict[str, Any] = {}
+    if path.exists():
+        try:
+            data = tomllib.loads(path.read_text(encoding="utf-8"))
+        except tomllib.TOMLDecodeError as exc:
+            raise ConfigError(f"{path}: {exc}") from exc
     try:
-        data = tomllib.loads(path.read_text(encoding="utf-8"))
-    except tomllib.TOMLDecodeError as exc:
-        raise ConfigError(f"{path}: {exc}") from exc
-    return from_dict(data)
+        env = envconfig.overlay(environ, data)
+    except envconfig.EnvConfigError as exc:
+        raise ConfigError(str(exc)) from exc
+    if not path.exists():
+        if not env:
+            raise ConfigError(
+                f"config file {path} not found: copy config.example.toml to {path.name}, "
+                "run `python -m scanamzn setup`, or set SCANAMZN_* environment variables"
+            )
+        log.debug("no config file at %s; using SCANAMZN_* environment variables", path)
+    return from_dict(envconfig.merge(data, env))
 
 
 def from_dict(data: dict[str, Any]) -> Settings:
@@ -182,6 +204,11 @@ def from_dict(data: dict[str, Any]) -> Settings:
     s.max_backoff_seconds = mon.float("max_backoff_seconds", s.max_backoff_seconds)
     s.debug_dump_dir = mon.str("debug_dump_dir", s.debug_dump_dir)
     s.log_file = mon.str("log_file", s.log_file)
+    s.daily_status_hour = mon.int("daily_status_hour", s.daily_status_hour)
+    if not -1 <= s.daily_status_hour <= 23:
+        raise ConfigError("monitor.daily_status_hour must be an hour 0-23 (IST), or -1 to disable")
+    status_file = mon.str("status_file", s.status_file)
+    s.status_file = str(Path(status_file).expanduser()) if status_file else ""
 
     flt = root.section("filter")
     require_any = flt.list("require_any", DEFAULT_REQUIRE_ANY)
@@ -202,15 +229,17 @@ def build_notifiers(s: Settings) -> list[Notifier]:
     try:
         email = s.raw.section("email")
         if email.bool("enabled", False):
+            username = email.str("username")
             notifiers.append(
                 EmailNotifier(
                     host=email.str("smtp_host", "smtp.gmail.com"),
                     port=email.int("smtp_port", 465),
                     security=email.str("security", "ssl"),
-                    username=email.str("username"),
+                    username=username,
                     password=email.str("password"),
                     from_addr=email.str("from_addr"),
-                    to_addrs=email.list("to", []),
+                    # Default: send the alerts to yourself.
+                    to_addrs=email.list("to", []) or ([username] if username else []),
                 )
             )
 

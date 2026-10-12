@@ -1,0 +1,130 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# Control the PS5 gift card monitor on an Android phone (Termux).
+#
+#   ps5 start | stop | restart | status | test | setup | log | update
+#
+# The home-screen buttons created by install.sh call these same commands.
+
+APP_DIR="${SCANAMZN_DIR:-$HOME/ScanAmzn.In}"
+CONFIG="$APP_DIR/config.toml"
+STATE_DIR="$HOME/.scanamzn"
+PIDFILE="$STATE_DIR/monitor.pid"
+LOG="$STATE_DIR/monitor.log"
+# Present while the user wants the monitor on; the boot script checks it.
+ENABLED="$STATE_DIR/enabled"
+
+mkdir -p "$STATE_DIR"
+cd "$APP_DIR" 2>/dev/null || { echo "ScanAmzn is not installed in $APP_DIR - run install.sh first."; exit 1; }
+
+say() {
+  echo "$1"
+  # Pop-up feedback when the optional Termux:API add-on is installed.
+  command -v termux-toast >/dev/null 2>&1 && termux-toast "$1" >/dev/null 2>&1 &
+}
+
+is_running() {
+  [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null
+}
+
+need_config() {
+  if [ ! -f "$CONFIG" ]; then
+    echo "Not set up yet. Running setup first..."
+    python -m scanamzn -c "$CONFIG" setup </dev/tty || exit 1
+  fi
+}
+
+start() {
+  if is_running; then
+    say "PS5 monitor is already running."
+    return 0
+  fi
+  need_config
+  touch "$ENABLED"
+  python -m scanamzn -c "$CONFIG" check-config >/dev/null 2>"$STATE_DIR/check.err" || {
+    say "Settings problem - run: ps5 setup"
+    cat "$STATE_DIR/check.err"
+    return 1
+  }
+  # Keep the CPU awake while the screen is off (releases with `ps5 stop`).
+  termux-wake-lock 2>/dev/null || true
+  # Start in a new session so it survives closing this window.
+  [ -f "$LOG" ] && [ "$(wc -c <"$LOG")" -gt 5000000 ] && mv -f "$LOG" "$LOG.old"
+  python - "$CONFIG" "$LOG" "$PIDFILE" <<'PY'
+import subprocess, sys
+config, log, pidfile = sys.argv[1:4]
+with open(log, "ab") as out:
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "scanamzn", "-c", config, "run"],
+        stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, start_new_session=True,
+    )
+with open(pidfile, "w") as fh:
+    fh.write(str(proc.pid))
+PY
+  sleep 4
+  if is_running; then
+    say "PS5 monitor started. You can close Termux; alerts arrive by e-mail/WhatsApp."
+  else
+    say "PS5 monitor failed to start:"
+    tail -n 15 "$LOG"
+    termux-wake-unlock 2>/dev/null || true
+    return 1
+  fi
+}
+
+stop() {
+  rm -f "$ENABLED"
+  if is_running; then
+    kill "$(cat "$PIDFILE")" 2>/dev/null
+    for _ in 1 2 3 4 5 6 7 8 9 10; do is_running || break; sleep 1; done
+    is_running && kill -9 "$(cat "$PIDFILE")" 2>/dev/null
+    say "PS5 monitor stopped."
+  else
+    say "PS5 monitor was not running."
+  fi
+  rm -f "$PIDFILE"
+  termux-wake-unlock 2>/dev/null || true
+}
+
+status() {
+  if is_running; then
+    echo "Process: running (pid $(cat "$PIDFILE"))"
+  else
+    echo "Process: NOT running - tap 'PS5 Start' or run: ps5 start"
+  fi
+  echo
+  python -m scanamzn -c "$CONFIG" status 2>/dev/null || echo "(no status yet)"
+  if [ -f "$LOG" ]; then
+    echo
+    echo "Last log lines:"
+    tail -n 6 "$LOG"
+  fi
+}
+
+update() {
+  local was_running=0
+  is_running && was_running=1
+  git pull --ff-only || { echo "Update failed (see above)."; return 1; }
+  python -m pip install --disable-pip-version-check -q requests beautifulsoup4
+  if [ "$was_running" = 1 ]; then stop; start; fi
+  say "PS5 monitor updated."
+}
+
+case "${1:-status}" in
+  start) start ;;
+  boot) if [ -f "$ENABLED" ]; then start; fi ;;
+  stop) stop ;;
+  restart) stop; start ;;
+  status) status ;;
+  test) need_config; python -m scanamzn -c "$CONFIG" test-notify ;;
+  check) need_config; python -m scanamzn -c "$CONFIG" once ;;
+  setup)
+    python -m scanamzn -c "$CONFIG" setup </dev/tty
+    is_running && { echo "Restarting with the new settings..."; stop; start; }
+    ;;
+  log) tail -n "${2:-40}" "$LOG" ;;
+  update) update ;;
+  *)
+    echo "usage: ps5 start|stop|restart|status|test|check|setup|log|update"
+    exit 2
+    ;;
+esac

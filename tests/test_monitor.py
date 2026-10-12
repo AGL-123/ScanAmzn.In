@@ -244,3 +244,88 @@ def test_search_result_used_when_watched_product_page_failed(fetcher, dispatcher
     assert fetcher.requests.count(fetcher.product_url("B0PSN01000")) == 1
     # ...and the in-stock search result still triggers the alert.
     assert any("₹1000" in msg.subject for msg in dispatcher.messages)
+
+
+class FakeWall:
+    def __init__(self, clock, start):
+        self.clock, self.start, self.t0 = clock, start, clock.t
+
+    def __call__(self):
+        from datetime import timedelta
+
+        return self.start + timedelta(seconds=self.clock.t - self.t0)
+
+
+def _wall(clock, hour=8, minute=30):
+    from datetime import datetime
+
+    from scanamzn.monitor import IST
+
+    return FakeWall(clock, datetime(2026, 10, 12, hour, minute, tzinfo=IST))
+
+
+def test_run_forever_stops_after_max_runtime(fetcher, dispatcher, clock):
+    m = make_monitor(fetcher, dispatcher, clock, **watching())
+    fetcher.set_product(ASIN, product_html(TITLE, available=False))
+    m._stop.wait = lambda t: clock.advance(t)  # simulated time instead of sleeping
+    m.run_forever(max_runtime_seconds=10 * 60)
+    # ~30s per cycle (+/- jitter) over 10 minutes, and never beyond the deadline.
+    assert 15 <= m.cycle <= 30
+    assert clock.t - 1000 <= 10 * 60 + 1
+
+
+def test_run_forever_survives_unexpected_errors(fetcher, dispatcher, clock, monkeypatch):
+    m = make_monitor(fetcher, dispatcher, clock, **watching())
+    m._stop.wait = lambda t: clock.advance(t)
+    calls = []
+
+    def boom():
+        calls.append(1)
+        raise RuntimeError("parser bug")
+
+    monkeypatch.setattr(m, "run_cycle", boom)
+    m.run_forever(max_runtime_seconds=120)
+    assert len(calls) >= 3
+    assert m.last_problem == "internal error (see log)"
+
+
+def test_daily_status_message_once_a_day(fetcher, dispatcher, clock):
+    s = make_settings(**watching(daily_status_hour=9, interval_seconds=600))
+    m = Monitor(s, fetcher, dispatcher, clock=clock, rng=random.Random(1), wall=_wall(clock, 8, 30))
+    fetcher.set_product(ASIN, product_html(TITLE, available=False))
+    m._stop.wait = lambda t: clock.advance(t)
+    m.run_forever(max_runtime_seconds=25 * 3600)  # 08:30 today -> 09:30 tomorrow
+    statuses = [msg for msg in dispatcher.messages if "is running" in msg.subject]
+    assert len(statuses) == 2  # 09:00 today and 09:00 tomorrow
+    assert "nothing in stock" in statuses[0].subject
+    assert "Watching 1 listing(s)" in statuses[0].body
+    assert "unavailable" in statuses[0].body
+    assert "\n" not in statuses[0].summary
+
+
+def test_daily_status_disabled_by_default(fetcher, dispatcher, clock):
+    m = Monitor(make_settings(**watching()), fetcher, dispatcher, clock=clock, wall=_wall(clock))
+    assert m.next_status_at is None
+
+
+def test_next_daily_status_time(fetcher, dispatcher, clock):
+    s = make_settings(**watching(daily_status_hour=9))
+    early = Monitor(s, fetcher, dispatcher, clock=clock, wall=_wall(clock, 8, 30))
+    late = Monitor(s, fetcher, dispatcher, clock=clock, wall=_wall(clock, 9, 0))
+    assert (early.next_status_at.day, early.next_status_at.hour) == (12, 9)
+    assert (late.next_status_at.day, late.next_status_at.hour) == (13, 9)
+
+
+def test_status_file(fetcher, dispatcher, clock, tmp_path):
+    import json
+
+    path = tmp_path / "state" / "status.json"
+    m = make_monitor(fetcher, dispatcher, clock, **watching(status_file=str(path)))
+    fetcher.set_product(ASIN, product_html(TITLE, available=True))
+    m.run_cycle()
+    m.write_status_file(next_check_in=42)
+    data = json.loads(path.read_text())
+    assert data["cycle"] == 1 and data["next_check_in_seconds"] == 42
+    item = data["items"][0]
+    assert (item["asin"], item["status"], item["in_stock"], item["price"]) == (ASIN, "available", True, 1000.0)
+    assert not list(path.parent.glob("*.tmp"))

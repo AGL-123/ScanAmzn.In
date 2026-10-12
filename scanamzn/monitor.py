@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import math
+import os
 import random
 import threading
 import time
@@ -53,6 +55,23 @@ class CycleReport:
     errors: int = 0
 
 
+@dataclass
+class _Stats:
+    """Counters for the daily status message."""
+
+    cycles: int = 0
+    pages: int = 0
+    alerts: int = 0
+    blocked: int = 0
+    errors: int = 0
+
+    def add(self, report: CycleReport) -> None:
+        self.cycles += 1
+        self.pages += report.checked
+        self.blocked += int(report.blocked)
+        self.errors += report.errors
+
+
 class Monitor:
     def __init__(
         self,
@@ -61,6 +80,7 @@ class Monitor:
         dispatcher: Dispatcher,
         clock: Callable[[], float] = time.monotonic,
         rng: random.Random | None = None,
+        wall: Callable[[], datetime] = lambda: datetime.now(IST),
     ):
         self.s = settings
         self.fetcher = fetcher
@@ -77,6 +97,11 @@ class Monitor:
         self._requests_in_cycle = 0
         self._dumped: set[str] = set()
         self._stop = threading.Event()
+        self.wall = wall
+        self.started_at = wall()
+        self.stats = _Stats()
+        self.stats_since = self.started_at
+        self.next_status_at = self._next_daily_status(self.started_at)
 
     # -- public API ------------------------------------------------------------
     def watch_list(self) -> list[str]:
@@ -85,16 +110,26 @@ class Monitor:
     def stop(self) -> None:
         self._stop.set()
 
-    def run_forever(self) -> None:
+    def run_forever(self, max_runtime_seconds: float | None = None) -> None:
+        """Check until stop() is called or ``max_runtime_seconds`` have passed."""
         log.info(
             "watching %d product(s) and %d search(es) on %s every ~%ds",
             len(self.s.asins), len(self.s.search_queries), self.s.domain, self.s.interval_seconds,
         )
+        deadline = self.clock() + max_runtime_seconds if max_runtime_seconds else math.inf
         while not self._stop.is_set():
             started = self.clock()
-            report = self.run_cycle()
+            try:
+                report = self.run_cycle()
+            except Exception:  # noqa: BLE001 - an unattended bot must survive its own bugs
+                log.exception("unexpected error during cycle %d; continuing", self.cycle)
+                self.last_problem = "internal error (see log)"
+                report = CycleReport(errors=1)
             self._check_health()
             wait = self.next_wait(report)
+            self.stats.add(report)
+            self._maybe_daily_status()
+            self.write_status_file(next_check_in=wait)
             log.info(
                 "cycle %d: %d page(s) checked, %d in stock%s%s in %.1fs; next check in %.0fs",
                 self.cycle, report.checked, len(report.available),
@@ -102,7 +137,11 @@ class Monitor:
                 f", {report.errors} error(s)" if report.errors else "",
                 self.clock() - started, wait,
             )
-            self._stop.wait(wait)
+            remaining = deadline - self.clock()
+            if remaining <= 0:
+                log.info("maximum run time reached; stopping")
+                break
+            self._stop.wait(min(wait, remaining))
 
     def next_wait(self, report: CycleReport) -> float:
         if report.blocked:
@@ -279,6 +318,7 @@ class Monitor:
                 cooldown = self.s.realert_cooldown_minutes * 60
                 if now - state.last_alert_at >= cooldown:
                     state.last_alert_at = now
+                    self.stats.alerts += 1
                     self.dispatcher.send(self._restock_message(state, product))
                 else:
                     log.info("%s back in stock, but alerted less than %.0f min ago", product.asin, cooldown / 60)
@@ -361,6 +401,89 @@ class Monitor:
                 summary=f"ScanAmzn has not reached Amazon.in for {minutes} minutes ({self.last_problem}).",
             )
         )
+
+    # -- daily status & status file ----------------------------------------------
+    def _next_daily_status(self, after: datetime) -> datetime | None:
+        hour = self.s.daily_status_hour
+        if hour < 0:
+            return None
+        candidate = after.astimezone(IST).replace(hour=hour, minute=0, second=0, microsecond=0)
+        return candidate if candidate > after else candidate + timedelta(days=1)
+
+    def _maybe_daily_status(self) -> None:
+        now = self.wall()
+        if self.next_status_at is None or now < self.next_status_at:
+            return
+        self.dispatcher.send(self.daily_status_message(now))
+        self.stats = _Stats()
+        self.stats_since = now
+        self.next_status_at = self._next_daily_status(now)
+
+    def daily_status_message(self, now: datetime) -> Message:
+        st = self.stats
+        watched = [self.items[a] for a in self.watch_list() if a in self.items]
+        in_stock = [i for i in watched if i.in_stock]
+        lines = [
+            "Your Amazon.in PlayStation gift card monitor is running.",
+            "",
+            f"Since {self.stats_since:%d %b, %H:%M} IST: {st.cycles} check rounds, {st.pages} pages, "
+            f"{st.alerts} in-stock alert(s), {st.blocked} captcha pause(s), {st.errors} error(s).",
+        ]
+        if self.health_alerted:
+            lines.append(f"⚠️ Checks are currently failing: {self.last_problem}")
+        lines += ["", f"Watching {len(watched)} listing(s):"]
+        for item in watched[:15]:
+            status = item.status or "not checked yet"
+            lines.append(f"• {shorten(item.title or item.asin, 60)}: {status}")
+        if len(watched) > 15:
+            lines.append(f"• …and {len(watched) - 15} more")
+        lines += ["", f"Next status message: {self._next_daily_status(now):%d %b, %H:%M} IST."]
+        state = f"{len(in_stock)} in stock now" if in_stock else "nothing in stock right now"
+        return Message(
+            subject=f"✅ PS5 gift card monitor is running ({state})",
+            body="\n".join(lines),
+            summary=f"PS5 gift card monitor is running: {st.cycles} checks since {self.stats_since:%d %b %H:%M}, "
+            f"{len(watched)} listings watched, {state}.",
+        )
+
+    def snapshot(self, next_check_in: float | None = None) -> dict:
+        """Current state as plain data (for the status file and summaries)."""
+        items = []
+        for asin in dict.fromkeys(self.watch_list() + list(self.items)):
+            item = self.items.get(asin, ItemState(asin))
+            items.append({
+                "asin": asin,
+                "title": item.title,
+                "status": item.status.value if item.status else None,
+                "price": item.price,
+                "seller": item.seller,
+                "in_stock": item.in_stock,
+                "watched": asin in self.watch_list(),
+            })
+        return {
+            "pid": os.getpid(),
+            "updated_at": self.wall().isoformat(timespec="seconds"),
+            "started_at": self.started_at.isoformat(timespec="seconds"),
+            "cycle": self.cycle,
+            "interval_seconds": self.s.interval_seconds,
+            "next_check_in_seconds": round(next_check_in) if next_check_in is not None else None,
+            "blocked_streak": self.block_streak,
+            "checks_failing": self.health_alerted,
+            "last_problem": self.last_problem,
+            "items": items,
+        }
+
+    def write_status_file(self, next_check_in: float | None = None) -> None:
+        if not self.s.status_file:
+            return
+        path = Path(self.s.status_file)
+        tmp = path.with_name(path.name + ".tmp")
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp.write_text(json.dumps(self.snapshot(next_check_in), indent=1, ensure_ascii=False), encoding="utf-8")
+            os.replace(tmp, path)
+        except OSError as exc:
+            log.warning("could not write status file %s: %s", path, exc)
 
     def _dump(self, key: str, html: str) -> None:
         if not self.s.debug_dump_dir or key in self._dumped:

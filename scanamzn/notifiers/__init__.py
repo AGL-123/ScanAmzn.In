@@ -70,9 +70,9 @@ class Dispatcher:
             return []
         return [self._pool.submit(self._deliver, n, message) for n in self.notifiers]
 
-    def send_and_wait(self, message: Message) -> dict[str, bool]:
+    def send_and_wait(self, message: Message) -> list[tuple[Notifier, bool]]:
         futures = self.send(message)
-        return {n.name: f.result() for n, f in zip(self.notifiers, futures)}
+        return [(n, f.result()) for n, f in zip(self.notifiers, futures)]
 
     def close(self) -> None:
         self._pool.shutdown(wait=True)

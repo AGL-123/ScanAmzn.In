@@ -163,7 +163,7 @@ def test_dispatcher_retries_then_succeeds():
     flaky, broken = Flaky(1), Flaky(99)
     broken.name = "broken"
     d = Dispatcher([flaky, broken], retries=3, retry_delay=0)
-    assert d.send_and_wait(MSG) == {"flaky": True, "broken": False}
+    assert [(n.name, ok) for n, ok in d.send_and_wait(MSG)] == [("flaky", True), ("broken", False)]
     assert flaky.calls == 2 and broken.calls == 3
     d.close()
 
