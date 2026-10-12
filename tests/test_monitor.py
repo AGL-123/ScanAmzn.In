@@ -328,3 +328,25 @@ def test_status_file(fetcher, dispatcher, clock, tmp_path):
     item = data["items"][0]
     assert (item["asin"], item["status"], item["in_stock"], item["price"]) == (ASIN, "available", True, 1000.0)
     assert not list(path.parent.glob("*.tmp"))
+
+
+def test_heartbeat_ping_is_rate_limited(fetcher, dispatcher, clock):
+    pings = []
+    s = make_settings(**watching(heartbeat_url="https://hc-ping.com/abc"))
+    m = Monitor(s, fetcher, dispatcher, clock=clock, rng=random.Random(1), pinger=pings.append)
+    fetcher.set_product(ASIN, product_html(TITLE, available=False))
+    m._stop.wait = lambda t: clock.advance(t)
+    m.run_forever(max_runtime_seconds=20 * 60)
+    import time
+
+    time.sleep(0.2)  # pings run in background threads
+    # ~30 s cycles for 20 minutes, but at most one ping per 4 minutes.
+    assert 4 <= len(pings) <= 6
+    assert set(pings) == {"https://hc-ping.com/abc"}
+
+
+def test_no_heartbeat_without_url(fetcher, dispatcher, clock):
+    pings = []
+    m = Monitor(make_settings(**watching()), fetcher, dispatcher, clock=clock, pinger=pings.append)
+    m._heartbeat()
+    assert pings == []

@@ -164,8 +164,9 @@ def test_dispatcher_retries_then_succeeds():
     broken.name = "broken"
     d = Dispatcher([flaky, broken], retries=3, retry_delay=0)
     assert [(n.name, ok) for n, ok in d.send_and_wait(MSG)] == [("flaky", True), ("broken", False)]
-    assert flaky.calls == 2 and broken.calls == 3
     d.close()
+    # flaky: one failure + one success, then the "broken could not deliver" notice.
+    assert flaky.calls == 3 and broken.calls == 3
 
 
 def test_dispatcher_dry_run_sends_nothing():
@@ -186,3 +187,57 @@ def test_callmebot_error_does_not_leak_apikey():
     with pytest.raises(NotifyError) as info:
         CallMeBotNotifier("+919876543210", "SECRET123", session=Exploding()).send(MSG)
     assert "SECRET123" not in str(info.value)
+
+
+@pytest.mark.parametrize(
+    "reply, meaning",
+    [
+        ("<p>Your Account is Paused due to technical issues. Please send the word \"resume\" to the bot</p>",
+         "send the word resume"),
+        ("<p>You have reached the limit of 50 messages per 240 minutes</p>", "limit is used up"),
+        ("<p>Something new and unexpected</p>", "unexpected CallMeBot reply"),
+    ],
+)
+def test_callmebot_problems_are_not_mistaken_for_success(reply, meaning):
+    with pytest.raises(NotifyError, match=meaning):
+        CallMeBotNotifier("+972521234567", "1", session=FakeSession(FakeResponse(200, reply))).send(MSG)
+
+
+class Named:
+    def __init__(self, name, rationed, fail=False):
+        self.name, self.rationed, self.fail, self.sent = name, rationed, fail, []
+
+    def send(self, message):
+        if self.fail:
+            raise NotifyError("account is paused")
+        self.sent.append(message)
+
+
+def test_routine_messages_spare_rationed_channels():
+    from scanamzn.notifiers import INFO
+
+    email, whatsapp = Named("email", False), Named("whatsapp/callmebot", True)
+    d = Dispatcher([email, whatsapp], retry_delay=0)
+    d.send_and_wait(Message("daily", "b", "s", kind=INFO))
+    d.send_and_wait(Message("IN STOCK", "b", "s"))
+    d.close()
+    assert [m.subject for m in email.sent] == ["daily", "IN STOCK"]
+    assert [m.subject for m in whatsapp.sent] == ["IN STOCK"]
+
+    # With WhatsApp as the only channel, routine messages still go out.
+    only = Named("whatsapp/callmebot", True)
+    d = Dispatcher([only], retry_delay=0)
+    d.send_and_wait(Message("daily", "b", "s", kind=INFO))
+    d.close()
+    assert [m.subject for m in only.sent] == ["daily"]
+
+
+def test_failed_alert_is_reported_on_the_other_channels():
+    email, whatsapp = Named("email", False), Named("whatsapp/callmebot", True, fail=True)
+    d = Dispatcher([email, whatsapp], retries=2, retry_delay=0)
+    d.send_and_wait(Message("🎮 IN STOCK: PSN ₹1000", "Buy: link", "s"))
+    d.close()  # waits for the follow-up notice
+    subjects = [m.subject for m in email.sent]
+    assert subjects[0] == "🎮 IN STOCK: PSN ₹1000"
+    assert subjects[1] == "⚠️ whatsapp/callmebot could not deliver an alert"
+    assert "account is paused" in email.sent[1].body and "Buy: link" in email.sent[1].body

@@ -51,6 +51,11 @@ You can skip either channel, but set up at least one.
 4. It replies with your **API key** (a few digits). This can take a couple of
    minutes. If nothing arrives, try again later. Keep that chat.
 
+> Use your normal WhatsApp for this, not a WhatsApp Business account. CallMeBot
+> is a free one-person service: if it ever replies that your account is
+> *paused*, send it the word `resume`. The bot tells you by e-mail when a
+> WhatsApp alert fails, so set up both channels if you can.
+
 ## Step 2: Install Termux (3 min)
 
 **Android 11 or newer: use Google Play (easiest).** Install **Termux** from the
@@ -90,7 +95,8 @@ packages) and then asks a few questions:
 | Your CallMeBot API key | the key from Step 1 |
 | ASINs | press Enter. The bot finds the gift cards by searching. |
 | Check every how many seconds | press Enter (60) |
-| Daily 'still running' message at what hour | press Enter (9), or `-1` for none |
+| At what hour (daily *still running* message) | press Enter (9), or `-1` for none. It goes by e-mail when e-mail is set up, so WhatsApp's free message allowance is kept for stock alerts. |
+| Ping URL (safety net) | press Enter to skip, or see Step 6 |
 
 Then it offers to **send a test alert**: answer yes and check that an e-mail and
 a WhatsApp message arrive. Finally, answer yes to **start the monitor**.
@@ -140,6 +146,20 @@ While the bot runs, the Termux notification says **wake lock held**. Don't tap
 Best setup: an **old spare Android phone** that stays at home on Wi-Fi and on
 the charger.
 
+## Step 6 (optional): Get warned if the bot stops (3 min)
+
+Even with Step 5, some phones still close Termux now and then, and a stopped
+bot can't warn you itself. A free outside service can:
+
+1. Open <https://healthchecks.io>, sign up (free), and tap **Add Check**.
+2. Set **Period** to *15 minutes* and **Grace Time** to *15 minutes*, then save.
+3. Copy the check's **ping URL** (it looks like `https://hc-ping.com/…`).
+4. Tap **PS5 Settings**, press Enter through the questions, and paste the URL at
+   *Ping URL*.
+
+The bot checks in every few minutes while it runs. If it goes quiet for half
+an hour, healthchecks.io e-mails you, and you can tap **PS5 Start**.
+
 ---
 
 ## Everyday use
@@ -181,12 +201,19 @@ phone on the charger if you can.
 
 * **No test message arrives**: tap **PS5 Test alert** and read the result.
   For WhatsApp, check the CallMeBot key and that your number has the country
-  code. For Gmail, create a new app password and run **PS5 Settings**.
+  code. If it says the account is *paused*, send `resume` to the CallMeBot
+  contact. For Gmail, create a new app password and run **PS5 Settings**.
+  Changing your Google password cancels app passwords.
+* **E-mail arrives but your phone doesn't ring**: Gmail may not notify you about
+  mail you sent to yourself. At *Send alerts to*, enter a different address
+  (any second mailbox), or rely on the WhatsApp alert.
 * **PS5 Status says NOT RUNNING**: tap **PS5 Start**. If it keeps stopping by
   itself, Android is killing Termux. Redo Step 5. When Android kills Termux,
   it does not restart by itself until you open it.
 * **"Amazon is showing a captcha" in the status**: the bot waits and retries
   by itself. If it lasts for hours, choose a longer interval in **PS5 Settings**.
+  Captchas apply to your whole internet connection, so you may briefly see them
+  too when you browse Amazon on the same Wi-Fi.
 * **Buttons don't appear in the widget**: open Termux once, then tap the
   widget's refresh icon. Termux and its add-ons must come from the same store.
 * **Something else**: `ps5 log` shows the last log lines, and `ps5 update`

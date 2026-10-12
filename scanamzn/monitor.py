@@ -18,10 +18,21 @@ from .config import Settings
 from .fetcher import FetchError, Fetcher
 from .filters import face_value
 from .models import DEFINITIVE, Product, SearchPage, Status
-from .notifiers import Dispatcher, Message
+from .notifiers import INFO, Dispatcher, Message
 from .parser import parse_product, parse_search
 
 log = logging.getLogger(__name__)
+
+HEARTBEAT_EVERY_SECONDS = 240
+
+
+def _http_ping(url: str) -> None:
+    import requests
+
+    try:
+        requests.get(url, timeout=15)
+    except requests.RequestException as exc:
+        log.debug("heartbeat ping failed: %s", type(exc).__name__)
 
 def format_inr(amount: float | None) -> str:
     if amount is None:
@@ -78,6 +89,7 @@ class Monitor:
         clock: Callable[[], float] = time.monotonic,
         rng: random.Random | None = None,
         wall: Callable[[], datetime] | None = None,
+        pinger: Callable[[str], None] = _http_ping,
     ):
         self.s = settings
         self.fetcher = fetcher
@@ -99,6 +111,8 @@ class Monitor:
         self.stats = _Stats()
         self.stats_since = self.started_at
         self.next_status_at = self._next_daily_status(self.started_at)
+        self.pinger = pinger
+        self.last_ping = -math.inf
 
     # -- public API ------------------------------------------------------------
     def watch_list(self) -> list[str]:
@@ -126,6 +140,7 @@ class Monitor:
             wait = self.next_wait(report)
             self.stats.add(report)
             self._maybe_daily_status()
+            self._heartbeat()
             self.write_status_file(next_check_in=wait)
             log.info(
                 "cycle %d: %d page(s) checked, %d in stock%s%s in %.1fs; next check in %.0fs",
@@ -361,6 +376,7 @@ class Monitor:
             subject=f"Gone: {shorten(title, 60)} ({reason})",
             body=f"{title}\nis {reason} on Amazon.in ({product.reason}).\n{self.fetcher.product_url(state.asin)}",
             summary=f"{shorten(title, 60)} is {reason} on Amazon.in.",
+            kind=INFO,
         )
 
     # -- health ------------------------------------------------------------------
@@ -374,6 +390,7 @@ class Monitor:
                     subject="✅ ScanAmzn is checking Amazon.in again",
                     body="The PS5 gift card monitor can reach Amazon.in again and is back to normal.",
                     summary="ScanAmzn can reach Amazon.in again.",
+                    kind=INFO,
                 )
             )
 
@@ -396,10 +413,19 @@ class Monitor:
                     "this machine's IP - try a longer monitor.interval_seconds or another network."
                 ),
                 summary=f"ScanAmzn has not reached Amazon.in for {minutes} minutes ({self.last_problem}).",
+                kind=INFO,
             )
         )
 
-    # -- daily status & status file ----------------------------------------------
+    # -- heartbeat, daily status & status file ------------------------------------
+    def _heartbeat(self) -> None:
+        """Tell the outside "dead man's switch" service that the monitor is alive."""
+        if not self.s.heartbeat_url or self.clock() - self.last_ping < HEARTBEAT_EVERY_SECONDS:
+            return
+        self.last_ping = self.clock()
+        # In the background: a slow ping must never delay stock checks.
+        threading.Thread(target=self.pinger, args=(self.s.heartbeat_url,), daemon=True).start()
+
     def _next_daily_status(self, after: datetime) -> datetime | None:
         hour = self.s.daily_status_hour
         if hour < 0:
@@ -441,6 +467,7 @@ class Monitor:
             body="\n".join(lines),
             summary=f"PS5 gift card monitor is running: {st.cycles} checks since {self.stats_since:%d %b %H:%M}, "
             f"{len(watched)} listings watched, {state}.",
+            kind=INFO,
         )
 
     def snapshot(self, next_check_in: float | None = None) -> dict:

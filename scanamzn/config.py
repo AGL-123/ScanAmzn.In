@@ -136,6 +136,9 @@ class Settings:
     tz: tzinfo = field(default_factory=timezones.resolve)
     # JSON file updated after every cycle, read by `scanamzn status`.
     status_file: str = ""
+    # "Dead man's switch" URL (e.g. healthchecks.io) pinged every few minutes
+    # while the monitor runs, so an outside service can warn if it stops.
+    heartbeat_url: str = ""
     # [filter]
     title_filter: TitleFilter = field(
         default_factory=lambda: TitleFilter(DEFAULT_REQUIRE_ANY, DEFAULT_EXCLUDE)
@@ -216,6 +219,9 @@ def from_dict(data: dict[str, Any]) -> Settings:
         s.tz = timezones.resolve(s.timezone)
     except timezones.TimezoneError as exc:
         raise ConfigError(f"monitor.timezone: {exc}") from exc
+    s.heartbeat_url = mon.str("heartbeat_url", s.heartbeat_url)
+    if s.heartbeat_url and not s.heartbeat_url.startswith(("https://", "http://")):
+        raise ConfigError("monitor.heartbeat_url must be a web address starting with https://")
     status_file = mon.str("status_file", s.status_file)
     s.status_file = str(Path(status_file).expanduser()) if status_file else ""
 

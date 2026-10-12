@@ -172,15 +172,27 @@ class Wizard:
         )
 
         out("   " + data_estimate(int(interval), len([a for a in asins.split(",") if a.strip()])))
+        out("   Every day the bot can send a short 'still running' message (by e-mail if you set it up).")
         daily = self._prompt_until(
-            "   Daily 'still running' message at what hour (0-23, or -1 for none)",
+            "   At what hour (0-23, or -1 for none)",
             lambda a: a if re.fullmatch(r"-1|1?\d|2[0-3]", a) else None,
             default=str(self._old("monitor", "daily_status_hour", default=9)),
+        )
+
+        out("\n5) SAFETY NET (optional)")
+        out("   If Android ever closes Termux, the bot can't warn you itself. A free service such as")
+        out("   https://healthchecks.io can e-mail you when the bot stops checking in. Paste its ping")
+        out("   URL here, or press Enter to skip.")
+        heartbeat = self._prompt_until(
+            "   Ping URL", lambda a: a if re.fullmatch(r"https?://\S+", a) else None,
+            default=self._old("monitor", "heartbeat_url"), optional=True,
+            hint="It should start with https://",
         )
 
         settings = {
             "email": email,
             "whatsapp": whatsapp,
+            "heartbeat_url": heartbeat,
             "asins": [a.strip().upper() for a in asins.split(",") if a.strip()],
             "interval": int(interval),
             "timezone": zone,
@@ -214,6 +226,7 @@ class Wizard:
             "# A short 'still running' message every day at this hour (-1 turns it off).",
             f"daily_status_hour = {s['daily_status_hour']}",
             'status_file = "~/.scanamzn/status.json"',
+            f"heartbeat_url = {_toml(s['heartbeat_url'])}",
             "",
         ]
         if s["email"]:

@@ -65,6 +65,9 @@ timezone = ""
 daily_status_hour = -1
 # JSON file with the current state, shown by `python -m scanamzn status`.
 status_file = ""
+# "Dead man's switch": a URL (e.g. from https://healthchecks.io) pinged every
+# few minutes while the monitor runs, so that service can warn you if it stops.
+heartbeat_url = ""
 
 
 [filter]

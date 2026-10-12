@@ -12,6 +12,7 @@ from . import Message, NotifyError
 
 class EmailNotifier:
     name = "email"
+    rationed = False
 
     def __init__(
         self,

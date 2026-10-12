@@ -36,7 +36,10 @@ Every ~45 seconds (randomised), the bot:
    bot can't see restocks. When checks work again, you get a recovery message.
 
 Alerts are sent on all channels in parallel and retried, so a slow mail server
-never delays the WhatsApp message or the next stock check.
+never delays the WhatsApp message or the next stock check. If one channel gives
+up on a stock alert (e.g. CallMeBot paused your account), the other channels
+tell you. Routine messages (the daily status, health warnings) go by e-mail when
+it is set up, so WhatsApp's small free message allowance is kept for stock alerts.
 
 ## Quick start
 
@@ -90,7 +93,7 @@ file is optional. That is handy for Docker (`--env-file`) and cloud servers.
 | `SCANAMZN_WHATSAPP_PHONE`, `SCANAMZN_CALLMEBOT_APIKEY` | WhatsApp number(s) and CallMeBot key(s), comma-separated, in the same order |
 | `SCANAMZN_ASINS` | ASINs to watch, comma-separated |
 | `SCANAMZN_SEARCH_QUERIES` | search queries separated by `;` |
-| `SCANAMZN_INTERVAL_SECONDS`, `SCANAMZN_DAILY_STATUS_HOUR`, `SCANAMZN_TIMEZONE`, `SCANAMZN_MAX_MARKUP_PERCENT`, `SCANAMZN_MAX_PRICE`, `SCANAMZN_NOTIFY_WHEN_SOLD_OUT`, `SCANAMZN_STATUS_FILE` | same as the config keys |
+| `SCANAMZN_INTERVAL_SECONDS`, `SCANAMZN_DAILY_STATUS_HOUR`, `SCANAMZN_TIMEZONE`, `SCANAMZN_HEARTBEAT_URL`, `SCANAMZN_MAX_MARKUP_PERCENT`, `SCANAMZN_MAX_PRICE`, `SCANAMZN_NOTIFY_WHEN_SOLD_OUT`, `SCANAMZN_STATUS_FILE` | same as the config keys |
 | `SCANAMZN_SMTP_HOST` / `_PORT` / `_SECURITY`, `SCANAMZN_EMAIL_FROM`, `SCANAMZN_EMAIL_TO` | other mail servers |
 | `SCANAMZN_TWILIO_ACCOUNT_SID` / `_AUTH_TOKEN` / `_FROM` / `_CONTENT_SID`, `SCANAMZN_META_TOKEN` / `_PHONE_NUMBER_ID` / `_TEMPLATE` | Twilio or Meta instead of CallMeBot (with `SCANAMZN_WHATSAPP_PHONE`) |
 

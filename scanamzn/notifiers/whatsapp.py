@@ -28,7 +28,17 @@ from . import Message, NotifyError
 log = logging.getLogger(__name__)
 
 _TIMEOUT = 30
-_CALLMEBOT_REJECTED = re.compile(r"invalid.{0,30}api ?key|api ?key.{0,30}invalid|^\s*error", re.I)
+# CallMeBot answers HTTP 200 for everything; only the page text tells success
+# from a paused account, a used-up quota or a bad key.
+_CALLMEBOT_OK = re.compile(r"message (?:queued|sent)", re.I)
+_CALLMEBOT_ERRORS = (
+    (re.compile(r"account is paused|send the word .{0,3}resume", re.I),
+     "CallMeBot paused your account - send the word resume to the CallMeBot contact on WhatsApp"),
+    (re.compile(r"limit of \d+ messages|\b0 messages left", re.I),
+     "CallMeBot's message limit is used up for now"),
+    (re.compile(r"invalid.{0,30}api ?key|api ?key.{0,30}invalid", re.I),
+     "CallMeBot says the API key is wrong - check it with the setup"),
+)
 
 
 def _text(message: Message) -> str:
@@ -47,6 +57,7 @@ def _check(resp: requests.Response, provider: str) -> None:
 
 class CallMeBotNotifier:
     url = "https://api.callmebot.com/whatsapp.php"
+    rationed = True  # free tier: roughly 50 messages per 4 hours, sometimes less
 
     def __init__(self, phone: str, apikey: str, session: requests.Session | None = None):
         if not (phone and apikey):
@@ -63,14 +74,18 @@ class CallMeBotNotifier:
             # The exception text contains the request URL, i.e. the API key.
             raise NotifyError(f"callmebot request failed: {type(exc).__name__}") from None
         _check(resp, "callmebot")
-        # CallMeBot answers HTTP 200 with an HTML page even when it rejects a call.
-        body = re.sub(r"<[^>]+>", " ", resp.text)
-        if _CALLMEBOT_REJECTED.search(body):
-            raise NotifyError(f"callmebot rejected the request: {' '.join(body.split())[:200]}")
-        log.debug("callmebot response: %s", " ".join(body.split())[:200])
+        text = " ".join(re.sub(r"<[^>]+>", " ", resp.text).split())
+        for pattern, meaning in _CALLMEBOT_ERRORS:
+            if pattern.search(text):
+                raise NotifyError(f"{meaning} (reply: {text[:160]})")
+        if not _CALLMEBOT_OK.search(text):
+            raise NotifyError(f"unexpected CallMeBot reply: {text[:200]}")
+        log.debug("callmebot response: %s", text[:200])
 
 
 class TwilioNotifier:
+    rationed = True  # paid per message
+
     def __init__(
         self,
         account_sid: str,
@@ -107,6 +122,8 @@ class TwilioNotifier:
 
 
 class MetaCloudNotifier:
+    rationed = True  # paid per message
+
     def __init__(
         self,
         access_token: str,

@@ -38,6 +38,7 @@ _SIMPLE: dict[str, tuple[str, str, str]] = {
     "DAILY_STATUS_HOUR": ("monitor", "daily_status_hour", "int"),
     "TIMEZONE": ("monitor", "timezone", "str"),
     "STATUS_FILE": ("monitor", "status_file", "str"),
+    "HEARTBEAT_URL": ("monitor", "heartbeat_url", "str"),
     "DEBUG_DUMP_DIR": ("monitor", "debug_dump_dir", "str"),
     "MAX_MARKUP_PERCENT": ("filter", "max_markup_percent", "float"),
     "MAX_PRICE": ("filter", "max_price", "float"),
