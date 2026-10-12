@@ -114,7 +114,10 @@ def overlay(environ: Mapping[str, str], base: Mapping[str, Any] | None = None) -
             data.setdefault(table, {})[key] = _convert(name, value, kind)
 
     for channel in ("email", "telegram"):
-        if channel in data:
+        # Setting a channel's variables turns it on - unless the config file
+        # has that channel itself: then its `enabled` decides, and the
+        # variables just fill in ${...} values such as a password.
+        if channel in data and channel not in (base or {}):
             data[channel].setdefault("enabled", True)
 
     whatsapp = _whatsapp(environ, bool((base or {}).get("whatsapp")))

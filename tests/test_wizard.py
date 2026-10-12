@@ -239,3 +239,87 @@ def test_telegram_chat_id_can_be_typed_when_detection_fails(tmp_path):
     run(path, ["Asia/Jerusalem", "", TOKEN, "", "55555", "", "", "60", "9", ""],
         telegram=FakeTelegram(started_after=99))
     assert tomllib.loads(path.read_text())["telegram"]["chat_id"] == "55555"
+
+
+class ScriptedTelegram(FakeTelegram):
+    """FakeTelegram whose getMe/getUpdates can fail like the real Bot API."""
+
+    def __init__(self, get_me_errors=(), started_after=0, find_errors=()):
+        super().__init__(started_after)
+        self.get_me_errors, self.find_errors = list(get_me_errors), list(find_errors)
+        self.calls = []
+
+    def bot_username(self, token):
+        self.calls.append(("getMe", token))
+        if self.get_me_errors:
+            raise self.get_me_errors.pop(0)
+        return "ps5_alerts_bot"
+
+    def find_chat(self, token):
+        self.calls.append(("getUpdates", token))
+        if self.find_errors:
+            raise self.find_errors.pop(0)
+        return super().find_chat(token)
+
+
+def _rejected(description, code):
+    from scanamzn.notifiers.telegram import TelegramRejected
+
+    return TelegramRejected(description, code)
+
+
+def test_bad_token_asks_for_the_token_again(tmp_path):
+    path, printed = tmp_path / "config.toml", []
+    cut = TOKEN[:-3]  # still looks like a token, but Telegram says Unauthorized
+    tg = ScriptedTelegram(get_me_errors=[_rejected("Unauthorized", 401)])
+    run(path, ["Asia/Jerusalem", "", cut, TOKEN, "", "", "", "60", "9", ""], out=printed.append, telegram=tg)
+    assert any("token is not valid" in line for line in printed)
+    assert tomllib.loads(path.read_text())["telegram"]["bot_token"] == TOKEN
+
+
+def test_bot_used_by_another_app_explains_what_to_do(tmp_path):
+    path, printed = tmp_path / "config.toml", []
+    tg = ScriptedTelegram(find_errors=[_rejected("Conflict: can't use getUpdates method while webhook is active", 409)])
+    run(path, ["Asia/Jerusalem", "", TOKEN, "", TOKEN, "", "", "", "60", "9", ""], out=printed.append, telegram=tg)
+    assert any("connected to another app" in line for line in printed)
+    assert tomllib.loads(path.read_text())["telegram"]["chat_id"] == "987654321"
+
+
+def test_unreachable_telegram_can_be_skipped_with_dash(tmp_path):
+    from scanamzn.notifiers.telegram import TelegramUnreachable
+
+    path, printed = tmp_path / "config.toml", []
+    down = TelegramUnreachable("telegram request failed: ConnectionError")
+    tg = ScriptedTelegram(get_me_errors=[down], find_errors=[down], started_after=99)
+    run(path, ["Asia/Jerusalem", "me@gmail.com", "pw", "", TOKEN, "", "-", "", "", "60", "9", ""],
+        out=printed.append, telegram=tg)
+    assert any("Could not reach Telegram" in line for line in printed)
+    assert "telegram" not in tomllib.loads(path.read_text())
+
+
+def test_manual_chat_id_must_not_start_with_zero(tmp_path):
+    path, printed = tmp_path / "config.toml", []
+    run(path, ["Asia/Jerusalem", "", TOKEN, "", "0521234567", "", "4242", "", "", "60", "9", ""],
+        out=printed.append, telegram=FakeTelegram(started_after=99))
+    assert any("doesn't start with 0" in line for line in printed)
+    assert tomllib.loads(path.read_text())["telegram"]["chat_id"] == "4242"
+
+
+def test_pasting_the_same_token_links_the_chat_again(tmp_path):
+    path = tmp_path / "config.toml"
+    run(path, ["Asia/Jerusalem", "", TOKEN, "", "1111", "", "", "60", "9", ""], telegram=FakeTelegram(99))
+    tg = ScriptedTelegram(started_after=0)
+    run(path, ["", "", TOKEN, "", "", "", "", "", ""], telegram=tg)
+    assert tomllib.loads(path.read_text())["telegram"]["chat_id"] == "987654321"
+    assert ("getUpdates", TOKEN) in tg.calls
+
+
+def test_enter_keeps_a_placeholder_token(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text(
+        '[telegram]\nenabled = true\nbot_token = "${SCANAMZN_TELEGRAM_TOKEN}"\nchat_id = "987654321"\n'
+    )
+    tg = ScriptedTelegram()
+    run(path, ["Asia/Jerusalem", "", "", "", "", "60", "9", ""], telegram=tg)
+    data = tomllib.loads(path.read_text())
+    assert data["telegram"]["bot_token"] == "${SCANAMZN_TELEGRAM_TOKEN}" and tg.calls == []

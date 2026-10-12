@@ -101,3 +101,23 @@ def test_missing_file_with_only_placeholder_secrets_says_file_not_found(tmp_path
         load(tmp_path / "missing.toml", environ={"SCANAMZN_SMTP_PASSWORD": "pw"})
     with pytest.raises(ConfigError, match="missing.toml not found.*incomplete"):
         load(tmp_path / "missing.toml", environ={"SCANAMZN_CALLMEBOT_APIKEY": "1"})
+
+
+def test_env_does_not_switch_on_a_channel_the_file_disables(tmp_path):
+    # config.example.toml ships [telegram] enabled = false with a ${SCANAMZN_TELEGRAM_TOKEN}
+    # placeholder; exporting that variable must not force Telegram on.
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(
+        '[email]\nenabled = true\nusername = "me@gmail.com"\npassword = "${SCANAMZN_SMTP_PASSWORD}"\n'
+        '[telegram]\nenabled = false\nbot_token = "${SCANAMZN_TELEGRAM_TOKEN}"\nchat_id = ""\n'
+    )
+    import os
+
+    env = {"SCANAMZN_SMTP_PASSWORD": "pw", "SCANAMZN_TELEGRAM_TOKEN": "123456789:AAH" + "x" * 32}
+    os.environ.update(env)
+    try:
+        s = load(cfg, environ=env)
+        assert [n.name for n in build_notifiers(s)] == ["email"]
+    finally:
+        for key in env:
+            os.environ.pop(key, None)

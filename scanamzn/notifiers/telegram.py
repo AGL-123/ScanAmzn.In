@@ -18,6 +18,28 @@ _TOKEN = re.compile(r"\d{5,}:[A-Za-z0-9_-]{30,}")
 _MAX_TEXT = 4096  # Telegram's message length limit
 
 
+class TelegramUnreachable(NotifyError):
+    """No usable answer from Telegram (no internet, proxy, server error)."""
+
+
+class TelegramRejected(NotifyError):
+    """Telegram answered and refused the request (bad token, blocked bot, ...)."""
+
+    def __init__(self, description: str, code: int | None = None):
+        super().__init__(f"telegram: {description}")
+        self.description, self.code = description, code
+
+    @property
+    def bad_token(self) -> bool:
+        return self.code in (401, 404) or "unauthorized" in self.description.lower()
+
+    @property
+    def used_elsewhere(self) -> bool:
+        # A webhook or another program polling the same bot blocks getUpdates.
+        text = self.description.lower()
+        return self.code == 409 or "webhook" in text or "conflict" in text
+
+
 def valid_token(token: str) -> bool:
     return bool(_TOKEN.fullmatch(token.strip()))
 
@@ -29,13 +51,13 @@ def call(token: str, method: str, session: requests.Session | None = None, **pay
         resp = session.post(_API.format(token=token, method=method), json=payload, timeout=30)
     except requests.RequestException as exc:
         # The URL, and so the exception text, contains the bot token.
-        raise NotifyError(f"telegram request failed: {type(exc).__name__}") from None
+        raise TelegramUnreachable(f"telegram request failed: {type(exc).__name__}") from None
     try:
         data = resp.json()
     except ValueError:
-        raise NotifyError(f"telegram HTTP {resp.status_code}") from None
+        raise TelegramUnreachable(f"telegram HTTP {resp.status_code}") from None
     if not data.get("ok"):
-        raise NotifyError(f"telegram: {data.get('description', f'HTTP {resp.status_code}')}")
+        raise TelegramRejected(data.get("description") or f"HTTP {resp.status_code}", data.get("error_code"))
     return data.get("result")
 
 

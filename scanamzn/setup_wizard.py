@@ -224,7 +224,8 @@ class Wizard:
         )
 
         out("   " + data_estimate(int(interval), len([a for a in asins.split(",") if a.strip()])))
-        out("   Every day the bot can send a short 'still running' message (by e-mail/Telegram).")
+        out("   Every day the bot can send a short 'still running' message"
+            " (by e-mail/Telegram when set up, to spare WhatsApp's small allowance).")
         daily = self._prompt_until(
             "   At what hour (0-23, or -1 for none)",
             lambda a: a if re.fullmatch(r"-1|1?\d|2[0-3]", a) else None,
@@ -264,39 +265,69 @@ class Wizard:
         out("   BotFather replies with a token like 123456789:AAH... - copy it and paste it here.")
         old_token = str(self._old("telegram", "bot_token"))
         old_chat = str(self._old("telegram", "chat_id"))
-        token = self._prompt_until(
-            "   Bot token", lambda a: a.strip() if self.telegram.valid_token(a) else None,
-            default=old_token, optional=True,
-            hint="Copy the whole token from BotFather's message (numbers, a colon, then letters).",
-        )
-        if not token:
-            return {}
-        if token == old_token and old_chat:
-            return {"bot_token": token, "chat_id": old_chat}  # nothing changed
+        while True:
+            # Pressing Enter keeps the saved bot as it is; pasting a token (even
+            # the same one) links the chat again.
+            raw = self.ask("   Bot token" + (" [keep current]" if old_token else "") + ": ").strip()
+            if raw == "-" or (not raw and not old_token):
+                return {}
+            if not raw and old_chat:
+                return {"bot_token": old_token, "chat_id": old_chat}
+            token = raw or old_token
+            if not self.telegram.valid_token(token):
+                out("  That doesn't look right. Copy the whole token from BotFather's message"
+                    " (numbers, a colon, then about 35 letters and digits).")
+                continue
+            try:
+                username = self.telegram.bot_username(token)
+            except telegram_api.TelegramRejected as exc:
+                out(self._telegram_problem(exc))
+                continue
+            except NotifyError as exc:
+                out(f"   Could not reach Telegram to check the token ({exc}). Is the internet on?")
+                username = ""
+            chat = self._link_telegram_chat(token, username)
+            if chat is None:
+                continue  # problem with the token: ask for it again
+            return {"bot_token": token, "chat_id": chat} if chat else {}
 
-        try:
-            username = self.telegram.bot_username(token)
-        except NotifyError as exc:
-            out(f"   Could not reach Telegram to check the token ({exc}).")
-            username = ""
+    @staticmethod
+    def _telegram_problem(exc: Exception) -> str:
+        if getattr(exc, "used_elsewhere", False):
+            return ("   This bot is already connected to another app or service. In @BotFather, send"
+                    " /newbot to create a new bot just for these alerts, and paste its token.")
+        if getattr(exc, "bad_token", False):
+            return "   Telegram says this token is not valid. Copy the whole token from BotFather again."
+        return f"   Telegram refused the token ({exc})."
+
+    def _link_telegram_chat(self, token: str, username: str) -> str | None:
+        """The chat ID; "" to skip Telegram; None to ask for the token again."""
+        out = self.out
         while True:
             where = f"https://t.me/{username}" if username else "your new bot in Telegram"
-            out(f"   Now open {where} and tap START (or send it any message).")
+            out(f"   Now open {where} and tap START (no Start button? send it any message).")
             self.ask("   Then press Enter here: ")
             try:
                 found = self.telegram.find_chat(token)
+            except telegram_api.TelegramRejected as exc:
+                out(self._telegram_problem(exc))
+                return None
             except NotifyError as exc:
-                out(f"   Could not reach Telegram ({exc}).")
+                out(f"   Could not reach Telegram ({exc}). Is the internet on?")
                 found = None
             if found:
                 chat_id, name = found
                 out(f"   Found your chat{f' ({name})' if name else ''}. Telegram alerts will go there.")
-                return {"bot_token": token, "chat_id": chat_id}
+                return chat_id
             answer = self._prompt(
-                "   No message from you yet. Press Enter to check again, or type your chat ID", ""
+                "   Not found yet. Press Enter to check again, type your chat ID, or - to skip Telegram", ""
             )
-            if re.fullmatch(r"-?\d{3,}", answer):
-                return {"bot_token": token, "chat_id": answer}
+            if answer == "-":
+                return ""
+            if re.fullmatch(r"-?[1-9]\d{2,}", answer):
+                return answer
+            if answer:
+                out("  A chat ID is a number that doesn't start with 0.")
 
     @staticmethod
     def _check_asins(answer: str) -> str | None:
