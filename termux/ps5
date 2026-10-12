@@ -5,6 +5,10 @@
 #
 # The home-screen buttons created by install.sh call these same commands.
 
+# Widget buttons and boot scripts may run with a minimal environment.
+PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
+export PATH="$PREFIX/bin:$PATH" PYTHONUNBUFFERED=1
+
 APP_DIR="${SCANAMZN_DIR:-$HOME/ScanAmzn.In}"
 CONFIG="$APP_DIR/config.toml"
 STATE_DIR="$HOME/.scanamzn"
@@ -20,6 +24,13 @@ say() {
   echo "$1"
   # Pop-up feedback when the optional Termux:API add-on is installed.
   command -v termux-toast >/dev/null 2>&1 && termux-toast "$1" >/dev/null 2>&1 &
+}
+
+ensure_packages() {
+  # A Termux Python upgrade (e.g. 3.13 -> 3.14) drops pip-installed packages.
+  python -c "import requests, bs4" 2>/dev/null && return 0
+  echo "Re-installing Python packages after a Termux update..."
+  python -m pip install -q requests beautifulsoup4
 }
 
 is_running() {
@@ -39,6 +50,7 @@ start() {
     return 0
   fi
   need_config
+  ensure_packages
   touch "$ENABLED"
   python -m scanamzn -c "$CONFIG" check-config >/dev/null 2>"$STATE_DIR/check.err" || {
     say "Settings problem - run: ps5 setup"
@@ -104,7 +116,7 @@ update() {
   local was_running=0
   is_running && was_running=1
   git pull --ff-only || { echo "Update failed (see above)."; return 1; }
-  python -m pip install --disable-pip-version-check -q requests beautifulsoup4
+  python -m pip install -q --upgrade requests beautifulsoup4
   if [ "$was_running" = 1 ]; then stop; start; fi
   say "PS5 monitor updated."
 }
@@ -115,9 +127,10 @@ case "${1:-status}" in
   stop) stop ;;
   restart) stop; start ;;
   status) status ;;
-  test) need_config; python -m scanamzn -c "$CONFIG" test-notify ;;
-  check) need_config; python -m scanamzn -c "$CONFIG" once ;;
+  test) need_config; ensure_packages; python -m scanamzn -c "$CONFIG" test-notify ;;
+  check) need_config; ensure_packages; python -m scanamzn -c "$CONFIG" once ;;
   setup)
+    ensure_packages
     python -m scanamzn -c "$CONFIG" setup </dev/tty
     is_running && { echo "Restarting with the new settings..."; stop; start; }
     ;;

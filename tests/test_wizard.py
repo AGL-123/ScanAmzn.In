@@ -27,7 +27,9 @@ def test_wizard_writes_working_config(tmp_path):
         "b0abcdefgh",                         # ASINs
         "20", "60",                           # interval: too low, then ok
     ])
-    Wizard(path, ask=ask, ask_secret=ask, out=lambda *a: None).run()
+    printed = []
+    Wizard(path, ask=ask, ask_secret=ask, out=printed.append).run()
+    assert any("Estimated data use" in line and "GB a day" in line for line in printed)
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
     data = tomllib.loads(path.read_text())
     assert data["email"]["password"] == "abcdefghijklmnop"
@@ -65,3 +67,13 @@ def test_normalise_phone():
     assert normalise_phone("919876543210") == "+919876543210"
     assert normalise_phone("0044 7700 900123") == "+447700900123"
     assert normalise_phone("12345") is None
+
+
+def test_data_estimate_scales_with_interval():
+    from scanamzn.setup_wizard import data_estimate
+
+    def high(text):
+        return float(text.split("-")[1].split()[0])
+
+    assert high(data_estimate(60, 0)) > high(data_estimate(300, 0))
+    assert high(data_estimate(60, 12)) > high(data_estimate(60, 0))

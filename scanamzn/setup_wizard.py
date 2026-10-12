@@ -40,6 +40,16 @@ def normalise_phone(raw: str) -> str | None:
     return digits if re.fullmatch(r"\+\d{8,15}", digits) else None
 
 
+def data_estimate(interval: int, asins: int, queries: int = 2, search_every: int = 3,
+                  max_discovered: int = 8) -> str:
+    """Rough daily mobile-data use for the settings the wizard writes."""
+    # Watched listings: the ASINs given, plus what the searches find (capped).
+    pages_per_round = max(asins, min(max_discovered, 6)) + queries / search_every
+    rounds_per_day = 86400 / (interval + 15)  # ~15 s of fetching per round
+    low, high = (pages_per_round * rounds_per_day * mb / 1024 for mb in (0.15, 0.3))
+    return f"Estimated data use: about {low:.1f}-{high:.1f} GB a day. Use Wi-Fi if you can."
+
+
 class Wizard:
     def __init__(self, path: Path, ask: Ask = input, ask_secret: Ask = getpass.getpass, out=print):
         self.path = path
@@ -134,6 +144,8 @@ class Wizard:
             lambda a: a if a.isdigit() and int(a) >= 30 else None,
             default=str(int(self._old("monitor", "interval_seconds", default=60))),
         )
+
+        out("   " + data_estimate(int(interval), len([a for a in asins.split(",") if a.strip()])))
 
         settings = {
             "email": email,
