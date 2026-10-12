@@ -41,6 +41,20 @@ You can skip either channel, but set up at least one.
 3. Google shows a 16-letter password (like `abcd efgh ijkl mnop`). Copy it;
    you'll paste it in Step 3.
 
+> **"The setting you are looking for is not available for your account"?**
+> Google only offers app passwords when **2-Step Verification is on**, and
+> signing in with a passkey does *not* turn it on. Open
+> <https://myaccount.google.com/signinoptions/twosv>, tap **Turn on 2-Step
+> Verification**, and add your phone number (or Google prompts) as the second
+> step. If 2-Step Verification is already on with *only* passkeys or security
+> keys, add a phone number or Google prompts there too. Then open the app
+> passwords page again. It is also unavailable for work/school accounts and
+> with Google's *Advanced Protection*.
+>
+> Tip: a separate free Gmail account just for the bot also works (with 2-Step
+> Verification and an app password), and its alerts to your main address then
+> ring like any other mail.
+
 **CallMeBot API key** (for WhatsApp alerts, free)
 
 1. Open <https://www.callmebot.com/blog/free-api-whatsapp-messages/> and find
