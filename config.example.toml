@@ -106,6 +106,15 @@ from_addr = "you@gmail.com"
 to = ["you@gmail.com"]
 
 
+[telegram]
+# Instant alerts from your own Telegram bot (free, recommended). Create the bot
+# with @BotFather, open it and tap Start, then `python -m scanamzn setup` finds
+# the chat ID for you.
+enabled = false
+bot_token = "${SCANAMZN_TELEGRAM_TOKEN}"
+chat_id = ""
+
+
 [whatsapp]
 enabled = true
 # "callmebot" (free, easiest), "twilio" or "meta" (WhatsApp Cloud API).

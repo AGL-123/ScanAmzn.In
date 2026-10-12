@@ -4,7 +4,8 @@ A bot that watches **Amazon.in** for **Indian-rupee PlayStation (PS5) gift cards
 (PSN wallet top-up / PlayStation Store cards). These cards show as *Currently
 unavailable* almost all the time and sell out within minutes of a restock. When
 one becomes buyable, the bot sends you an **e-mail** and a **WhatsApp message**
-right away, with a direct product link and a one-click *add to cart* link.
+right away (Telegram is also supported, and is the most reliable instant
+channel), with a direct product link and a one-click *add to cart* link.
 
 > **📱 No PC? Run it on your Android phone:** follow **[PHONE.md](PHONE.md)**.
 > One install command, then home-screen buttons to start, stop and check it.
@@ -90,6 +91,7 @@ file is optional. That is handy for Docker (`--env-file`) and cloud servers.
 | Variable | Meaning |
 |---|---|
 | `SCANAMZN_SMTP_USER`, `SCANAMZN_SMTP_PASSWORD` | Gmail address and app password (turns e-mail alerts on; alerts go to that address unless `SCANAMZN_EMAIL_TO` is set) |
+| `SCANAMZN_TELEGRAM_TOKEN`, `SCANAMZN_TELEGRAM_CHAT_ID` | Telegram bot token and your chat ID (turns Telegram alerts on) |
 | `SCANAMZN_WHATSAPP_PHONE`, `SCANAMZN_CALLMEBOT_APIKEY` | WhatsApp number(s) and CallMeBot key(s), comma-separated, in the same order |
 | `SCANAMZN_ASINS` | ASINs to watch, comma-separated |
 | `SCANAMZN_SEARCH_QUERIES` | search queries separated by `;` |
@@ -120,7 +122,23 @@ where required, for example Outlook (`smtp.office365.com`).
 The alert e-mail is marked high-priority. Consider a Gmail filter that marks it
 important, so it bypasses notification bundling on your phone.
 
+### Telegram (recommended for instant phone alerts)
+
+Free, official and reliable: messages from your own bot ring like any chat.
+
+1. In Telegram, open **@BotFather**, send `/newbot` and follow the prompts. It
+   gives you a bot token like `123456789:AAH...`.
+2. Open your new bot and tap **Start** (a bot can only message people who did).
+3. Run `python -m scanamzn setup`, which finds your chat ID automatically, or set
+   `[telegram] enabled = true`, `bot_token` and `chat_id` yourself. The chat ID
+   appears in `https://api.telegram.org/bot<token>/getUpdates` after step 2.
+
 ### WhatsApp
+
+WhatsApp has no free, official way for a bot to message a personal number, so
+every option has a catch. CallMeBot often doesn't reply or pauses accounts (2026),
+the Twilio sandbox must be re-joined every 3 days, and Meta's API needs a
+business setup and pre-approved message templates. Prefer Telegram.
 
 Pick one provider in `[whatsapp] provider`:
 

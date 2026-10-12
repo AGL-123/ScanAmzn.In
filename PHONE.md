@@ -3,9 +3,9 @@
 The bot runs **on your Android phone itself**, inside the free Termux app. No PC
 is needed at any step. Once it is set up you control it with buttons on your home
 screen: **PS5 Start**, **PS5 Stop**, **PS5 Status**, **PS5 Test alert**,
-**PS5 Settings** and **PS5 Check now**. Alerts arrive by e-mail and WhatsApp,
-and every morning (9:00 your time, adjustable) you get a short *"still
-running"* message so you know it's alive.
+**PS5 Settings** and **PS5 Check now**. Alerts arrive by e-mail and Telegram
+(WhatsApp is optional), and every morning (9:00 your time, adjustable) you get
+a short *"still running"* message so you know it's alive.
 
 Why on the phone: Amazon trusts a normal mobile or home connection far more than
 cloud servers, which it often answers with captchas.
@@ -23,8 +23,8 @@ cloud servers, which it often answers with captchas.
 > **iPhone?** iOS does not let apps run a program in the background 24/7, so
 > the bot can't run on an iPhone. See [No Android phone?](#no-android-phone).
 
-Setup takes about 15-20 minutes. You need your **Gmail address** and your
-**WhatsApp number**.
+Setup takes about 15-20 minutes. You need your **Gmail address** and the
+**Telegram** app (free, from Google Play).
 
 ---
 
@@ -55,20 +55,37 @@ You can skip either channel, but set up at least one.
 > Verification and an app password), and its alerts to your main address then
 > ring like any other mail.
 
-**CallMeBot API key** (for WhatsApp alerts, free)
+**Telegram bot** (instant phone alerts, free, recommended)
+
+Telegram lets anyone create a personal "bot" that can message you, using
+Telegram's official service. It's free, and its messages arrive and ring like
+any chat message.
+
+1. Install **Telegram** from Google Play and sign up with your phone number
+   (skip if you already use it).
+2. In Telegram, search for **@BotFather** (the official one, with a blue tick)
+   and tap **Start**.
+3. Send `/newbot`. Give it any name (e.g. *My PS5 alerts*), then a username
+   that ends in `bot` (e.g. `avi_ps5_alerts_bot`).
+4. BotFather replies with a **token** like `123456789:AAH...`. Tap it to copy
+   it; you'll paste it in Step 3. Keep it private: whoever has it can send
+   messages as your bot.
+
+You don't need to find any "chat ID": during setup, the installer asks you to
+open your bot and tap **Start**, and finds your chat by itself.
+
+**WhatsApp via CallMeBot** (optional; skip it if it doesn't answer)
+
+CallMeBot is a free one-person service. In 2026 it often doesn't reply or pauses
+accounts, which is why Telegram is recommended. If you still want WhatsApp too:
 
 1. Open <https://www.callmebot.com/blog/free-api-whatsapp-messages/> and find
-   their current WhatsApp number on that page. It changes from time to time.
-2. Save that number in your contacts (any name, e.g. *CallMeBot*).
-3. On WhatsApp, send that contact exactly:
-   `I allow callmebot to send me messages`
-4. It replies with your **API key** (a few digits). This can take a couple of
-   minutes. If nothing arrives, try again later. Keep that chat.
-
-> Use your normal WhatsApp for this, not a WhatsApp Business account. CallMeBot
-> is a free one-person service: if it ever replies that your account is
-> *paused*, send it the word `resume`. The bot tells you by e-mail when a
-> WhatsApp alert fails, so set up both channels if you can.
+   their **current** WhatsApp number on that page (it changes often).
+2. Save that number in your contacts and send it exactly, from your normal (not
+   Business) WhatsApp: `I allow callmebot to send me messages`
+3. It replies with an **API key**. If nothing comes within a few minutes, check
+   that you used today's number and the exact sentence. Otherwise skip WhatsApp:
+   you can add it later with **PS5 Settings**.
 
 ## Step 2: Install Termux (3 min)
 
@@ -105,15 +122,17 @@ packages) and then asks a few questions:
 | Your Gmail address | `you@gmail.com` (or press Enter to skip e-mail) |
 | Gmail app password | the 16 letters from Step 1 (typing is hidden; spaces are fine) |
 | Send alerts to | press Enter to send them to yourself |
-| Your WhatsApp number | as you normally write it, e.g. `052-123-4567`. The country code is added from your time zone, and the result (`+972521234567`) is shown so you can check it. Or type it with the code: `+972 52 123 4567`. |
-| Your CallMeBot API key | the key from Step 1 |
+| Bot token | the Telegram token from Step 1 |
+| *Now open https://t.me/your_bot and tap START* | tap the link (or find your bot in Telegram), tap **Start**, come back to Termux and press Enter. It confirms *Found your chat*. |
+| Your WhatsApp number | press Enter to skip WhatsApp. If you set up CallMeBot: type it as usual, e.g. `052-123-4567` (the country code is added for you and the result is shown). |
+| Your CallMeBot API key | (only if you entered a WhatsApp number) the key from CallMeBot |
 | ASINs | press Enter. The bot finds the gift cards by searching. |
 | Check every how many seconds | press Enter (60) |
-| At what hour (daily *still running* message) | press Enter (9), or `-1` for none. It goes by e-mail when e-mail is set up, so WhatsApp's free message allowance is kept for stock alerts. |
+| At what hour (daily *still running* message) | press Enter (9), or `-1` for none. It goes by e-mail and Telegram, not WhatsApp (whose small free allowance is kept for stock alerts). |
 | Ping URL (safety net) | press Enter to skip, or see Step 6 |
 
-Then it offers to **send a test alert**: answer yes and check that an e-mail and
-a WhatsApp message arrive. Finally, answer yes to **start the monitor**.
+Then it offers to **send a test alert**: answer yes and check that the e-mail and
+the Telegram message arrive. Finally, answer yes to **start the monitor**.
 
 ## Step 4: Add the home-screen buttons (2 min)
 
@@ -183,7 +202,7 @@ an hour, healthchecks.io e-mails you, and you can tap **PS5 Start**.
 | **PS5 Start** | Starts watching (if it isn't already). |
 | **PS5 Stop** | Stops watching. It stays off, even after a reboot, until you tap Start. |
 | **PS5 Status** | Is it running, when it last checked, any problems, and the status of every listing it watches. |
-| **PS5 Test alert** | Sends a test e-mail and WhatsApp. |
+| **PS5 Test alert** | Sends a test message on every channel you set up. |
 | **PS5 Settings** | Asks the setup questions again. Press Enter to keep an answer, type `-` to remove a channel. Restarts the bot with the new settings. |
 | **PS5 Check now** | Checks Amazon once right now and shows what it finds (sends no alerts). |
 
@@ -214,13 +233,15 @@ phone on the charger if you can.
 ## Troubleshooting
 
 * **No test message arrives**: tap **PS5 Test alert** and read the result.
-  For WhatsApp, check the CallMeBot key and that your number has the country
-  code. If it says the account is *paused*, send `resume` to the CallMeBot
-  contact. For Gmail, create a new app password and run **PS5 Settings**.
-  Changing your Google password cancels app passwords.
+  For Telegram, make sure you tapped **Start** in your bot's chat and didn't
+  block it; run **PS5 Settings** and paste the token again to re-link the chat.
+  For Gmail, create a new app password and run **PS5 Settings**. Changing your
+  Google password cancels app passwords. For WhatsApp, check the CallMeBot key
+  and that your number has the country code; if it says the account is
+  *paused*, send `resume` to the CallMeBot contact.
 * **E-mail arrives but your phone doesn't ring**: Gmail may not notify you about
   mail you sent to yourself. At *Send alerts to*, enter a different address
-  (any second mailbox), or rely on the WhatsApp alert.
+  (any second mailbox), or rely on the Telegram alert.
 * **PS5 Status says NOT RUNNING**: tap **PS5 Start**. If it keeps stopping by
   itself, Android is killing Termux. Redo Step 5. When Android kills Termux,
   it does not restart by itself until you open it.

@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import timezones
+from .notifiers import NotifyError
+from .notifiers import telegram as telegram_api
 
 APP_PASSWORD_URL = "https://myaccount.google.com/apppasswords"
 CALLMEBOT_URL = "https://www.callmebot.com/blog/free-api-whatsapp-messages/"
@@ -106,8 +108,10 @@ def data_estimate(interval: int, asins: int, queries: int = 2, search_every: int
 
 
 class Wizard:
-    def __init__(self, path: Path, ask: Ask = input, ask_secret: Ask = getpass.getpass, out=print):
+    def __init__(self, path: Path, ask: Ask = input, ask_secret: Ask = getpass.getpass, out=print,
+                 telegram=telegram_api):
         self.path = path
+        self.telegram = telegram  # Bot API helpers (replaceable in tests)
         self.ask = ask
         self.ask_secret = ask_secret
         self.out = out
@@ -181,8 +185,11 @@ class Wizard:
             email = {"username": gmail, "password": password,
                      "to": [t.strip() for t in to.split(",") if t.strip()] or [gmail]}
 
-        out("\n3) WHATSAPP ALERTS (free CallMeBot service)")
-        out(f"   Get your API key first: {CALLMEBOT_URL}")
+        telegram = self._telegram()
+
+        out("\n4) WHATSAPP ALERTS (optional, free CallMeBot service)")
+        out("   CallMeBot is unreliable (often no reply, paused accounts); Telegram is recommended.")
+        out(f"   Get an API key first: {CALLMEBOT_URL}")
         out("   (save their number in your contacts and send it: I allow callmebot to send me messages)")
         old_recipients = self._old("whatsapp", "callmebot", "recipients", default=[]) or []
         old_recipient = old_recipients[0] if old_recipients and isinstance(old_recipients[0], dict) else {}
@@ -200,10 +207,10 @@ class Wizard:
             )
             whatsapp = {"phone": phone, "apikey": apikey}
 
-        if not email and not whatsapp:
+        if not email and not telegram and not whatsapp:
             raise SystemExit("No alert channel configured - nothing saved. Run setup again.")
 
-        out("\n4) WHAT TO WATCH")
+        out("\n5) WHAT TO WATCH")
         out("   Searches find PlayStation gift cards automatically. Optionally add product IDs (ASINs,")
         out("   the 10 characters after /dp/ in an Amazon link), separated by commas.")
         asins = self._prompt_until(
@@ -217,14 +224,14 @@ class Wizard:
         )
 
         out("   " + data_estimate(int(interval), len([a for a in asins.split(",") if a.strip()])))
-        out("   Every day the bot can send a short 'still running' message (by e-mail if you set it up).")
+        out("   Every day the bot can send a short 'still running' message (by e-mail/Telegram).")
         daily = self._prompt_until(
             "   At what hour (0-23, or -1 for none)",
             lambda a: a if re.fullmatch(r"-1|1?\d|2[0-3]", a) else None,
             default=str(self._old("monitor", "daily_status_hour", default=9)),
         )
 
-        out("\n5) SAFETY NET (optional)")
+        out("\n6) SAFETY NET (optional)")
         out("   If Android ever closes Termux, the bot can't warn you itself. A free service such as")
         out("   https://healthchecks.io can e-mail you when the bot stops checking in. Paste its ping")
         out("   URL here, or press Enter to skip.")
@@ -236,6 +243,7 @@ class Wizard:
 
         data = self.merge({
             "email": email,
+            "telegram": telegram,
             "whatsapp": whatsapp,
             "heartbeat_url": heartbeat,
             "asins": [a.strip().upper() for a in asins.split(",") if a.strip()],
@@ -248,6 +256,47 @@ class Wizard:
         self.write(data)
         out(f"\nSaved {self.path}")
         return data
+
+    def _telegram(self) -> dict[str, Any]:
+        out = self.out
+        out("\n3) TELEGRAM ALERTS (recommended: free, reliable, rings like a chat message)")
+        out("   In Telegram, open @BotFather, send /newbot, pick any name and a username ending in 'bot'.")
+        out("   BotFather replies with a token like 123456789:AAH... - copy it and paste it here.")
+        old_token = str(self._old("telegram", "bot_token"))
+        old_chat = str(self._old("telegram", "chat_id"))
+        token = self._prompt_until(
+            "   Bot token", lambda a: a.strip() if self.telegram.valid_token(a) else None,
+            default=old_token, optional=True,
+            hint="Copy the whole token from BotFather's message (numbers, a colon, then letters).",
+        )
+        if not token:
+            return {}
+        if token == old_token and old_chat:
+            return {"bot_token": token, "chat_id": old_chat}  # nothing changed
+
+        try:
+            username = self.telegram.bot_username(token)
+        except NotifyError as exc:
+            out(f"   Could not reach Telegram to check the token ({exc}).")
+            username = ""
+        while True:
+            where = f"https://t.me/{username}" if username else "your new bot in Telegram"
+            out(f"   Now open {where} and tap START (or send it any message).")
+            self.ask("   Then press Enter here: ")
+            try:
+                found = self.telegram.find_chat(token)
+            except NotifyError as exc:
+                out(f"   Could not reach Telegram ({exc}).")
+                found = None
+            if found:
+                chat_id, name = found
+                out(f"   Found your chat{f' ({name})' if name else ''}. Telegram alerts will go there.")
+                return {"bot_token": token, "chat_id": chat_id}
+            answer = self._prompt(
+                "   No message from you yet. Press Enter to check again, or type your chat ID", ""
+            )
+            if re.fullmatch(r"-?\d{3,}", answer):
+                return {"bot_token": token, "chat_id": answer}
 
     @staticmethod
     def _check_asins(answer: str) -> str | None:
@@ -282,6 +331,11 @@ class Wizard:
             email.setdefault("security", "ssl")
         elif isinstance(data.get("email"), dict):
             data["email"]["enabled"] = False
+
+        if answers["telegram"]:
+            data.setdefault("telegram", {}).update(enabled=True, **answers["telegram"])
+        elif isinstance(data.get("telegram"), dict):
+            data["telegram"]["enabled"] = False
 
         if answers["whatsapp"]:
             whatsapp = data.setdefault("whatsapp", {})

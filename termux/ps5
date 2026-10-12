@@ -107,7 +107,7 @@ with open(pidfile, "w") as fh:
 PY
   sleep 4
   if is_running; then
-    say "PS5 monitor started. You can close Termux; alerts arrive by e-mail/WhatsApp."
+    say "PS5 monitor started. You can close Termux; alerts will reach you by themselves."
   else
     say "PS5 monitor failed to start:"
     tail -n 15 "$LOG"

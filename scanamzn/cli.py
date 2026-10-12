@@ -61,6 +61,8 @@ def _channels(notifiers: list[Notifier]) -> list[str]:
     for n in notifiers:
         if n.name == "email":
             described.append("e-mail to " + ", ".join(_mask_email(a) for a in getattr(n, "to_addrs", [])))
+        elif n.name == "telegram":
+            described.append("Telegram")
         else:
             described.append(n.name.replace("whatsapp/", "WhatsApp via "))
     return described
@@ -72,7 +74,7 @@ def cmd_check_config(args: argparse.Namespace, s: Settings) -> int:
     lines = [
         f"Watching {len(s.asins)} product(s) and {len(s.search_queries)} search(es) on {s.domain}, "
         f"every ~{s.interval_seconds:.0f}s.",
-        "Alerts: " + ("; ".join(channels) if channels else "NONE - set up e-mail and/or WhatsApp"),
+        "Alerts: " + ("; ".join(channels) if channels else "NONE - set up e-mail, Telegram or WhatsApp"),
     ]
     if s.daily_status_hour >= 0:
         lines.append(f"Daily 'still running' message at {s.daily_status_hour:02d}:00 ({_zone_name(s)}).")
@@ -114,7 +116,7 @@ def cmd_run(args: argparse.Namespace, s: Settings) -> int:
         return 3
     notifiers = [] if args.dry_run else build_notifiers(s)
     if not notifiers and not args.dry_run:
-        log.error("no notification channel is enabled - set up e-mail and/or WhatsApp first")
+        log.error("no notification channel is enabled - set up e-mail, Telegram or WhatsApp first")
         return 2
     log.info("alerts: %s", "; ".join(_channels(notifiers)) or "dry run (log only)")
     dispatcher = Dispatcher(notifiers, dry_run=args.dry_run)

@@ -22,6 +22,7 @@ from . import envconfig, timezones
 from .filters import TitleFilter
 from .notifiers import Notifier, NotifyError
 from .notifiers.email import EmailNotifier
+from .notifiers.telegram import TelegramNotifier
 from .notifiers.whatsapp import CallMeBotNotifier, MetaCloudNotifier, TwilioNotifier
 
 log = logging.getLogger(__name__)
@@ -178,7 +179,12 @@ def load(path: str | Path, environ: Mapping[str, str] | None = None) -> Settings
         # Without a file, the environment must describe at least one alert
         # channel; otherwise a mistyped -c path would silently run on defaults.
         email = env.get("email", {})
-        if not ((email.get("username") and email.get("password")) or "whatsapp" in env):
+        telegram = env.get("telegram", {})
+        if not (
+            (email.get("username") and email.get("password"))
+            or (telegram.get("bot_token") and telegram.get("chat_id"))
+            or "whatsapp" in env
+        ):
             raise ConfigError(missing)
         log.debug("no config file at %s; using SCANAMZN_* environment variables", path)
     return from_dict(envconfig.merge(data, env))
@@ -265,6 +271,11 @@ def build_notifiers(s: Settings) -> list[Notifier]:
                     to_addrs=email.list("to", []) or ([username] if username else []),
                 )
             )
+
+        tg = s.raw.section("telegram")
+        if tg.bool("enabled", False):
+            chat_id = tg.get("chat_id", "", (str, int))
+            notifiers.append(TelegramNotifier(tg.str("bot_token"), str(chat_id).strip()))
 
         wa = s.raw.section("whatsapp")
         if wa.bool("enabled", False):

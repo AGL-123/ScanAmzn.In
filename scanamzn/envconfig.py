@@ -49,6 +49,8 @@ _SIMPLE: dict[str, tuple[str, str, str]] = {
     "SMTP_PASSWORD": ("email", "password", "secret"),
     "EMAIL_FROM": ("email", "from_addr", "str"),
     "EMAIL_TO": ("email", "to", "words"),
+    "TELEGRAM_TOKEN": ("telegram", "bot_token", "str"),
+    "TELEGRAM_CHAT_ID": ("telegram", "chat_id", "str"),
 }
 _WHATSAPP = (
     "WHATSAPP_PHONE",
@@ -111,8 +113,9 @@ def overlay(environ: Mapping[str, str], base: Mapping[str, Any] | None = None) -
         if value:
             data.setdefault(table, {})[key] = _convert(name, value, kind)
 
-    if "email" in data:
-        data["email"].setdefault("enabled", True)
+    for channel in ("email", "telegram"):
+        if channel in data:
+            data[channel].setdefault("enabled", True)
 
     whatsapp = _whatsapp(environ, bool((base or {}).get("whatsapp")))
     if whatsapp:
