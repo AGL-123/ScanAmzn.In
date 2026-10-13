@@ -67,3 +67,11 @@ def test_fetcher_waits_for_the_budget_before_any_request(tmp_path):
     with pytest.raises(FetchError):
         fetcher.get("https://www.amazon.in/dp/B0Z")
     assert len(sent) == 2
+
+
+def test_works_without_fcntl(monkeypatch, tmp_path):
+    from scanamzn import budget as budget_mod
+
+    monkeypatch.setattr(budget_mod, "fcntl", None)  # e.g. Windows
+    b = budget_mod.RequestBudget(tmp_path / "times", per_minute=1, clock=FakeClock())
+    assert b.path is None and b._reserve() == 0.0 and b._reserve() > 0

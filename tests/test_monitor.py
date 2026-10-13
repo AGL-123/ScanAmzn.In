@@ -721,23 +721,89 @@ def test_data_saver_checks_only_the_main_cards_half_as_often(fetcher, dispatcher
     assert fetcher.search_url("psn") in fetcher.requests and m.saver is False
 
 
-def test_monitor_waits_while_a_self_test_runs(fetcher, dispatcher, clock):
+def _paused_monitor(fetcher, dispatcher, clock):
     from datetime import datetime, timezone
-
-    from scanamzn import selftest
 
     m = make_monitor(fetcher, dispatcher, clock, **watching())
     m.wall = lambda: datetime.fromtimestamp(clock(), timezone.utc)
-    m._stop.wait = lambda t: clock.advance(t)
     fetcher.set_product(ASIN, product_html(TITLE, available=False))
     m.pause_flag.parent.mkdir(parents=True, exist_ok=True)
-    m.pause_flag.write_text(f"{clock() + 120}\n")
+    return m
+
+
+def _hold_pause(m, until):
+    """What a running self-test does: write the end time and keep a lock."""
+    import fcntl
+    import os
+
+    fd = os.open(m.pause_flag, os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    os.write(fd, f"{until:.0f}\n".encode())
+    return fd
+
+
+def test_monitor_waits_while_a_self_test_runs(fetcher, dispatcher, clock):
+    import os
+
+    m = _paused_monitor(fetcher, dispatcher, clock)
+    m._stop.wait = lambda t: clock.advance(t)
+    fd = _hold_pause(m, clock() + 120)
     start = clock()
     m.run_forever(max_runtime_seconds=1)
-    assert clock() - start >= 120 and fetcher.requests  # waited, then checked
+    assert clock() - start >= 120 and fetcher.requests  # waited until the end time, then checked
+    os.close(fd)
 
-    m.pause_flag.write_text("garbage")  # unreadable: ignored
-    fetcher.requests.clear()
+
+def test_monitor_resumes_at_once_when_the_self_test_ends_or_dies(fetcher, dispatcher, clock):
+    import os
+
+    m = _paused_monitor(fetcher, dispatcher, clock)
+    fd = _hold_pause(m, clock() + 600)
+
+    def wait(t):
+        clock.advance(t)
+        os.close(fd)  # the self-test is killed: its lock goes, its file stays
+
+    m._stop.wait = wait
+    start = clock()
     m.run_forever(max_runtime_seconds=1)
-    assert fetcher.requests
-    assert selftest.pause_file(m.s) == m.pause_flag
+    assert clock() - start <= 10 and fetcher.requests and not m.pause_flag.exists()
+
+
+def test_a_pause_file_nobody_holds_is_ignored(fetcher, dispatcher, clock):
+    m = _paused_monitor(fetcher, dispatcher, clock)
+    m._stop.wait = lambda t: clock.advance(t)
+    for content in (f"{clock() + 600:.0f}\n", "garbage", "inf"):
+        m.pause_flag.write_text(content)
+        fetcher.requests.clear()
+        start = clock()
+        m.run_forever(max_runtime_seconds=1)
+        assert clock() - start < 5 and fetcher.requests
+
+
+def test_a_pause_never_lasts_longer_than_the_limit(fetcher, dispatcher, clock):
+    import os
+
+    from scanamzn.selftest import PAUSE_SECONDS
+
+    m = _paused_monitor(fetcher, dispatcher, clock)
+    m._stop.wait = lambda t: clock.advance(t)
+    fd = _hold_pause(m, clock() + 365 * 86400)  # a wrong clock, say
+    start = clock()
+    m.run_forever(max_runtime_seconds=1)
+    assert PAUSE_SECONDS <= clock() - start <= PAUSE_SECONDS + 10 and fetcher.requests
+    os.close(fd)
+
+
+def test_data_saver_skips_listings_found_by_searches_unless_in_stock(fetcher, dispatcher, clock):
+    m = rotating_monitor(fetcher, dispatcher, clock)
+    m.discovered = ["B0FOUND001", "B0ROT00003"]  # found by earlier searches (one is also a value in turn)
+    fetcher.set_product("B0FOUND001", product_html("Rs.2000 card by a reseller", available=False))
+    m.saver_flag.parent.mkdir(parents=True, exist_ok=True)
+    m.saver_flag.touch()
+    m.run_cycle()
+    assert fetcher.requests == [fetcher.product_url(ASIN)]
+    fetcher.requests.clear()
+    fetcher.set_product(ASIN, product_html(TITLE, available=True))  # restock: sweep the other values
+    m.run_cycle()
+    assert fetcher.product_url("B0ROT00003") in fetcher.requests

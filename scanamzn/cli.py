@@ -250,18 +250,26 @@ def cmd_selftest(args: argparse.Namespace, s: Settings) -> int:
         time.sleep(rng.uniform(*s.request_delay_seconds))
         return False
 
+    def pace(seconds: float) -> None:
+        if seconds >= 5:
+            print(f"(waiting {seconds:.0f} s, so Amazon doesn't see a burst of requests...)", flush=True)
+        time.sleep(seconds)
+
+    # Closing the window (SIGHUP) or a stop (SIGTERM) still runs the clean-up below.
+    for name in ("SIGHUP", "SIGTERM"):
+        if hasattr(signal, name):
+            signal.signal(getattr(signal, name), lambda signum, _frame: sys.exit(128 + signum))
     rng = random.Random()
     fetcher = _fetcher(s)
-    # The running monitor waits meanwhile; the pause expires by itself if this dies.
-    selftest.pause_monitor(s, selftest.PAUSE_SECONDS)
+    fetcher.wait = pace
     try:
-        result = selftest.run(
-            s, fetcher, pause=pause, dump=dump,
-            progress=lambda text: print(text, flush=True),
-            wait=time.sleep,
-        )
+        with selftest.monitor_paused(s):  # a running monitor waits meanwhile
+            result = selftest.run(
+                s, fetcher, pause=pause, dump=dump,
+                progress=lambda text: print(text, flush=True),
+                wait=time.sleep,
+            )
     finally:
-        selftest.resume_monitor(s)
         fetcher.close()
     text = result.summary()
     if saved:

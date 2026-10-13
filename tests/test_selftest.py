@@ -376,9 +376,10 @@ def test_selftest_command_pauses_the_monitor_while_it_runs(cli_env, monkeypatch,
     real_run = selftest.run
 
     def run(settings, *a, **kw):
-        seen.append(selftest.pause_file(settings).exists())
+        with open(selftest.pause_file(settings), encoding="ascii") as fh:
+            seen.append(selftest.pause_holder_alive(fh))  # as the monitor sees it
         return real_run(settings, *a, **kw)
 
     monkeypatch.setattr(selftest, "run", run)
     cli.main(["selftest"])
-    assert seen == [True] and not (tmp_path / "state" / "paused-until").exists()
+    assert seen == [True] and not list((tmp_path / "state").glob("paused-until*"))

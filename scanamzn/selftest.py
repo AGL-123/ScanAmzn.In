@@ -15,7 +15,10 @@ it together with the other checks and gives a verdict:
 
 from __future__ import annotations
 
+import os
 import random
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -23,6 +26,11 @@ from typing import Callable
 from .fetcher import FetchError, Fetcher, Page
 from .models import Product, Status
 from .parser import delivery_location, is_blocked, parse_product, parse_search
+
+try:
+    import fcntl
+except ImportError:  # Windows
+    fcntl = None
 
 CONTROL_QUERIES = ("usb c cable", "a4 notebook", "ballpoint pen")
 CONTROL_CHECK = "In-stock detection"
@@ -360,22 +368,44 @@ def pause_file(settings) -> Path:
     return state_dir(settings) / "paused-until"
 
 
-def pause_monitor(settings, seconds: float) -> None:
-    import time
-
+@contextmanager
+def monitor_paused(settings, seconds: float = PAUSE_SECONDS):
+    """Ask a running monitor to wait while the self-test runs. The file holds
+    the time the pause ends at the latest, and the self-test keeps an exclusive
+    lock on it: if the self-test dies in any way (even killed outright), the
+    system drops the lock and the monitor carries on at once."""
+    path = pause_file(settings)
+    fd = None
     try:
-        path = pause_file(settings)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(f"{time.time() + seconds:.0f}\n", encoding="ascii")
+        tmp = path.with_name(f"{path.name}.{os.getpid()}")
+        fd = os.open(tmp, os.O_RDWR | os.O_CREAT | os.O_TRUNC, 0o600)
+        if fcntl is not None:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        os.write(fd, f"{time.time() + seconds:.0f}\n".encode("ascii"))
+        os.replace(tmp, path)  # appears already locked
     except OSError:
         pass  # the request budget still keeps the two apart
-
-
-def resume_monitor(settings) -> None:
     try:
-        pause_file(settings).unlink(missing_ok=True)
-    except OSError:
-        pass
+        yield
+    finally:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        if fd is not None:
+            os.close(fd)
+
+
+def pause_holder_alive(fh) -> bool:
+    """True while the self-test that wrote the pause file still holds its lock."""
+    if fcntl is None:
+        return True  # can't tell: rely on the time in the file
+    try:
+        fcntl.flock(fh, fcntl.LOCK_SH | fcntl.LOCK_NB)
+    except OSError:  # held (or can't tell)
+        return True
+    return False
 
 
 def debug_dir(settings) -> Path:

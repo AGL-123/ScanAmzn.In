@@ -202,23 +202,32 @@ class Monitor:
 
     def _wait_while_paused(self) -> None:
         """`PS5 Check now` makes its own requests and asks the monitor to wait
-        meanwhile, with an expiry time, so a check that dies can't keep the
-        monitor paused for long."""
-        paused = False
+        meanwhile. Only while that self-test is alive (it holds a lock on the
+        pause file) and for PAUSE_SECONDS at most, so a check that dies or a
+        wrong clock can't keep the monitor from watching."""
+        from .selftest import PAUSE_SECONDS, pause_holder_alive
+
+        paused_at = None
         while not self._stop.is_set():
             try:
-                until = float(self.pause_flag.read_text(encoding="ascii"))
+                with open(self.pause_flag, encoding="ascii") as fh:
+                    if not pause_holder_alive(fh):
+                        self.pause_flag.unlink(missing_ok=True)  # left by a self-test that died
+                        break
+                    until = float(fh.read())
             except (OSError, ValueError):
                 break
             left = until - self.wall().timestamp()
-            if left <= 0:
+            if not math.isfinite(left) or left <= 0:
                 break
-            if not paused:
-                paused = True
-                log.info("paused while the self-test runs (at most %.0f s)", left)
-                self.write_status_file(next_check_in=left)
+            if paused_at is None:
+                paused_at = self.clock()
+                log.info("paused while the self-test runs")
+                self.write_status_file(next_check_in=min(left, PAUSE_SECONDS))
+            elif self.clock() - paused_at >= PAUSE_SECONDS:
+                break
             self._stop.wait(min(left, 5.0))
-        if paused:
+        if paused_at is not None:
             log.info("self-test done; checking again")
 
     def next_wait(self, report: CycleReport) -> float:
@@ -244,7 +253,11 @@ class Monitor:
             self.saver = saver
             log.info("data saver %s", "ON: only the main cards, half as often" if saver else "OFF: checking everything")
 
-        for asin in sorted(self.watch_list(), key=lambda a: a in self.suspect):
+        if self.saver:  # the main cards; listings found by searches only while in stock
+            watched = self.s.asins + [a for a in self.discovered if a in self.items and self.items[a].in_stock]
+        else:
+            watched = self.watch_list()
+        for asin in sorted(watched, key=lambda a: a in self.suspect):
             if self._stop.is_set():
                 return report
             product = self._check_product(asin, report)
@@ -254,7 +267,7 @@ class Monitor:
 
         # The other known gift card values come before the searches: they matter
         # more. Data saver: only cards in stock and the sweep after a restock.
-        if not self._check_other_values(report, checked, pick=not self.saver):
+        if not self._check_other_values(report, checked, watched, pick=not self.saver):
             return report
 
         # Search every round when no product pages are watched (searches are
@@ -280,17 +293,19 @@ class Monitor:
                 if report.blocked:
                     return report
             # A restock the searches found: check the other values right away too.
-            if self.sweep and not self._check_other_values(report, checked, pick=False):
+            if self.sweep and not self._check_other_values(report, checked, watched, pick=False):
                 return report
         return report
 
-    def _check_other_values(self, report: CycleReport, checked: dict[str, Product], pick: bool) -> bool:
+    def _check_other_values(
+        self, report: CycleReport, checked: dict[str, Product], watched: list[str], pick: bool
+    ) -> bool:
         """The values not checked every round (settings.rotating_asins):
         other_listings_per_round of them in turn (``pick``), any in stock, and
         all of them right after any card came back (``self.sweep``, kept until
         done - a bot check doesn't lose it). False when the round must stop."""
-        rotating = [a for a in self.s.rotating_asins if a not in self.discovered]
-        self.sweep &= set(rotating)  # discovered ones are checked every round anyway
+        rotating = [a for a in self.s.rotating_asins if a not in watched]
+        self.sweep &= set(rotating)  # the watched ones are checked every round anyway
         self.sweep -= {a for a, p in checked.items() if p.status is not Status.BLOCKED}
         todo = [a for a in rotating if a not in checked]
         batch = [a for a in todo if a in self.sweep or (a in self.items and self.items[a].in_stock)]

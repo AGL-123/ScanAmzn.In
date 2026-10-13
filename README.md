@@ -232,12 +232,14 @@ for hours. So every bot process - monitor, self-test, in-stock check - draws
 from one budget of `monitor.max_requests_per_minute` (default 8), kept in a
 file next to the status file. The self-test also opens only the main cards and
 three of the values checked in turn, and asks a running monitor to pause while
-it runs (a `paused-until` file that expires by itself after 10 minutes).
+it runs: a `paused-until` file that the self-test keeps locked, so the pause
+ends as soon as the self-test does (however it ends), and after 10 minutes at
+the most.
 
 **Data saver**: while a file `data-saver` exists next to the status file
-(`ps5 saver` on the phone), the monitor checks only `asins` (no values in turn
-except right after a restock, no searches) and waits twice as long between
-rounds. It is read every round, so switching needs no restart.
+(`ps5 saver` on the phone), the monitor checks only `asins` (listings found by
+searches only while in stock, values in turn only right after a restock, no
+searches) and waits twice as long between rounds. It is read every round, so switching needs no restart.
 
 The running monitor repeats the positive control every
 `monitor.selftest_every_hours` (default 6). It warns after two failures in a

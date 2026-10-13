@@ -9,12 +9,16 @@ file, which holds even when two of them run at the same time.
 
 from __future__ import annotations
 
-import fcntl
 import logging
 import os
 import time
 from pathlib import Path
 from typing import Any, Callable
+
+try:
+    import fcntl
+except ImportError:  # Windows: count within this process only
+    fcntl = None
 
 log = logging.getLogger(__name__)
 
@@ -23,7 +27,7 @@ WINDOW = 60.0  # seconds
 
 class RequestBudget:
     def __init__(self, path: str | Path | None, per_minute: int, clock: Callable[[], float] = time.time):
-        self.path = Path(path) if path else None
+        self.path = Path(path) if path and fcntl is not None else None
         self.per_minute = per_minute
         self.clock = clock  # wall clock: shared between processes
         self._local: list[float] = []  # when the file can't be used
