@@ -1,7 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # Control the PS5 gift card monitor on an Android phone (Termux).
 #
-#   ps5 start | stop | restart | status | test | check | saver | setup | log | update | export | boost
+#   ps5 start | stop | restart | status | test | check | extensive | saver | setup | log | update | export | boost
 #
 # The home-screen buttons call these same commands.
 
@@ -20,6 +20,8 @@ LOCK="$STATE_DIR/lock"
 ENABLED="$STATE_DIR/enabled"
 # Present while the user wants to spare mobile data; the monitor checks it every round.
 SAVER="$STATE_DIR/data-saver"
+# Present while the user wants every card value watched (default: the focused cards only).
+EXTENSIVE="$STATE_DIR/extensive"
 PACKAGES="requests beautifulsoup4 tzdata"
 
 mkdir -p "$STATE_DIR"
@@ -139,9 +141,23 @@ saver() {
     *) if [ -f "$SAVER" ]; then rm -f "$SAVER"; else touch "$SAVER"; fi ;;
   esac
   if [ -f "$SAVER" ]; then
-    say "Data saver ON: only the main gift cards, half as often. Tap PS5 Data saver again on Wi-Fi."
+    say "Data saver ON: fewer pages, half as often. Tap PS5 Data saver again on Wi-Fi."
   else
     say "Data saver OFF: checking everything again."
+  fi
+  is_running || echo "(The monitor is not running - tap PS5 Start.)"
+}
+
+extensive() {
+  case "${1:-toggle}" in
+    on) touch "$EXTENSIVE" ;;
+    off) rm -f "$EXTENSIVE" ;;
+    *) if [ -f "$EXTENSIVE" ]; then rm -f "$EXTENSIVE"; else touch "$EXTENSIVE"; fi ;;
+  esac
+  if [ -f "$EXTENSIVE" ]; then
+    say "Extensive mode ON: every card value (Rs.500-12,000) plus searches. Tap PS5 Extensive mode again for the focused mode."
+  else
+    say "Focused mode: only the Rs.4000 and Rs.2000 cards, checked more often."
   fi
   is_running || echo "(The monitor is not running - tap PS5 Start.)"
 }
@@ -239,6 +255,7 @@ install_shortcuts() {
   shortcut "PS5 Settings" "\"$ps5\" setup; $pause"
   shortcut "PS5 Check now" "\"$ps5\" check; $pause"
   shortcut "PS5 Data saver" "\"$ps5\" saver; sleep 5"
+  shortcut "PS5 Extensive mode" "\"$ps5\" extensive; sleep 5"
   chmod 700 "$dir"
   # Restart after the phone reboots (Termux:Boot), if the monitor was on.
   rm -f "$boot/ps5-monitor"
@@ -275,6 +292,7 @@ case "${1:-status}" in
   test) need_config; ensure_packages; python -m scanamzn -c "$CONFIG" test-notify ;;
   check) need_config; ensure_packages; python -m scanamzn -c "$CONFIG" selftest --send ;;
   saver) saver "${2:-toggle}" ;;
+  extensive) extensive "${2:-toggle}" ;;
   export) export_files ;;
   boost) take_lock; boost ;;
   setup)
@@ -288,7 +306,7 @@ case "${1:-status}" in
   _after-update) take_lock; after_update "${2:-0}" ;;
   install-shortcuts) install_shortcuts ;;
   *)
-    echo "usage: ps5 start|stop|restart|status|test|check|saver [on|off]|setup|log|update|export|boost"
+    echo "usage: ps5 start|stop|restart|status|test|check|extensive [on|off]|saver [on|off]|setup|log|update|export|boost"
     exit 2
     ;;
 esac

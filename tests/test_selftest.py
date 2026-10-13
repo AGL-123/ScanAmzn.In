@@ -383,3 +383,15 @@ def test_selftest_command_pauses_the_monitor_while_it_runs(cli_env, monkeypatch,
     monkeypatch.setattr(selftest, "run", run)
     cli.main(["selftest"])
     assert seen == [True] and not list((tmp_path / "state").glob("paused-until*"))
+
+
+def test_selftest_in_focused_mode_opens_the_focused_cards_and_skips_searches(fetcher):
+    fetcher = full_site(fetcher)
+    s = _settings(asins=["B0PSN02000"], focus_asins=["B0PSN05000"])
+    assert not selftest.extensive_mode(s)
+    test = selftest.run(s, fetcher, NO_PAUSE, lambda k, h: None, lambda m: None)
+    assert [c.name for c in test.checks] == ["Amazon.in reachable", "Gift card pages", selftest.CONTROL_CHECK]
+    opened = [u.rsplit("/", 1)[1] for u in fetcher.requests if "/dp/" in u]
+    assert opened[:2] == ["B0PSN05000", "B0PSN02000"]  # focused cards (+ the user's own)
+    assert fetcher.search_url("playstation gift card") not in fetcher.requests
+    assert test.verdict == "pass"

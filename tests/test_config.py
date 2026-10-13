@@ -106,3 +106,19 @@ def test_fetcher_sends_a_current_consistent_chrome_identity(monkeypatch):
     monkeypatch.setattr(requests.Session, "request", lambda self, *a, **k: calls.append(a))
     session = fetcher_mod.Fetcher(backend="requests")._new_session()
     assert calls == [] and session.headers["sec-ch-ua-mobile"] == "?0"
+
+
+def test_focus_listings_by_default():
+    from scanamzn.config import FOCUS_LISTINGS, from_dict
+
+    s = from_dict({})
+    assert s.focus_asins == list(FOCUS_LISTINGS) == ["B07K6RYVJ5", "B093QF35KZ"]
+    assert s.focus_interval_seconds == 30
+    mine = from_dict({"amazon": {"asins": ["b0mine0001"]}})
+    assert mine.focus_asins == ["B07K6RYVJ5", "B093QF35KZ", "B0MINE0001"]  # the user's own are kept
+    assert from_dict({"amazon": {"watch_known_listings": False, "asins": ["B0MINE0001"]}}).focus_asins == []
+    assert from_dict({"amazon": {"focus_asins": ["B0CYNZJLBC"]}}).focus_asins == ["B0CYNZJLBC"]
+    with pytest.raises(ConfigError):
+        from_dict({"amazon": {"focus_asins": ["nope"]}})
+    with pytest.raises(ConfigError):
+        from_dict({"monitor": {"focus_interval_seconds": 5}})

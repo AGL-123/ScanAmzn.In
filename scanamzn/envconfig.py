@@ -32,6 +32,7 @@ _SIMPLE: dict[str, tuple[str, str, str]] = {
     "INTERVAL_SECONDS": ("monitor", "interval_seconds", "float"),
     "SEARCH_EVERY_CYCLES": ("monitor", "search_every_cycles", "int"),
     "MAX_REQUESTS_PER_MINUTE": ("monitor", "max_requests_per_minute", "int"),
+    "FOCUS_INTERVAL_SECONDS": ("monitor", "focus_interval_seconds", "float"),
     "MAX_DISCOVERED": ("monitor", "max_discovered", "int"),
     "REALERT_COOLDOWN_MINUTES": ("monitor", "realert_cooldown_minutes", "float"),
     "NOTIFY_WHEN_SOLD_OUT": ("monitor", "notify_when_sold_out", "bool"),

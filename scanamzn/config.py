@@ -57,6 +57,14 @@ MORE_LISTINGS = {
     "B0B4B88S9V": "PlayStation Network Wallet Top-Up 4500",
 }
 
+# The two values seen back in stock far more often than the others (October
+# 2026). By default the bot watches only these, more often ("focused mode");
+# `ps5 extensive` switches to all the listings above plus searches.
+FOCUS_LISTINGS = {
+    "B07K6RYVJ5": "Rs.4000 Sony PlayStation Store Gift Card",
+    "B093QF35KZ": "Rs.2000 Sony PlayStation Store Gift Card",
+}
+
 DEFAULT_QUERIES = [
     "playstation gift card",
     "psn wallet top up card",
@@ -144,12 +152,16 @@ class Settings:
     domain: str = "www.amazon.in"
     asins: list[str] = field(default_factory=list)
     rotating_asins: list[str] = field(default_factory=list)  # checked one per round
+    # Focused mode (the default when set): only these, every focus_interval_seconds.
+    # Empty = always the extensive mode.
+    focus_asins: list[str] = field(default_factory=list)
     search_queries: list[str] = field(default_factory=lambda: list(DEFAULT_QUERIES))
     http_backend: str = "auto"
     proxy: str = ""
     request_timeout: float = 20.0
     # [monitor]
-    interval_seconds: float = 45.0
+    interval_seconds: float = 45.0  # extensive mode
+    focus_interval_seconds: float = 30.0  # focused mode: few pages, so more often
     jitter: float = 0.25
     request_delay_seconds: tuple[float, float] = (1.0, 3.0)
     search_every_cycles: int = 1
@@ -233,10 +245,15 @@ def from_dict(data: dict[str, Any]) -> Settings:
     amazon = root.section("amazon")
     s.domain = amazon.str("domain", s.domain)
     s.asins = [a.strip().upper() for a in amazon.list("asins", [])]
-    for asin in s.asins:
-        if not _ASIN.match(asin):
-            raise ConfigError(f"amazon.asins: {asin!r} is not a 10-character ASIN")
-    if amazon.bool("watch_known_listings", True):
+    known = amazon.bool("watch_known_listings", True)
+    focus = [a.strip().upper() for a in amazon.list("focus_asins", list(FOCUS_LISTINGS) if known else [])]
+    for name, asins in (("asins", s.asins), ("focus_asins", focus)):
+        for asin in asins:
+            if not _ASIN.match(asin):
+                raise ConfigError(f"amazon.{name}: {asin!r} is not a 10-character ASIN")
+    # ASINs the user added are watched in both modes.
+    s.focus_asins = list(dict.fromkeys(focus + s.asins)) if focus else []
+    if known:
         s.asins += list(KNOWN_LISTINGS)
         s.rotating_asins = [a for a in MORE_LISTINGS if a not in s.asins]
     s.asins = list(dict.fromkeys(s.asins))
@@ -249,8 +266,10 @@ def from_dict(data: dict[str, Any]) -> Settings:
 
     mon = root.section("monitor")
     s.interval_seconds = mon.float("interval_seconds", s.interval_seconds)
-    if s.interval_seconds < 10:
-        raise ConfigError("monitor.interval_seconds must be at least 10 (Amazon will block faster polling)")
+    s.focus_interval_seconds = mon.float("focus_interval_seconds", s.focus_interval_seconds)
+    if min(s.interval_seconds, s.focus_interval_seconds) < 10:
+        raise ConfigError("monitor.interval_seconds and focus_interval_seconds must be at least 10"
+                          " (Amazon will block faster polling)")
     s.jitter = min(max(mon.float("jitter", s.jitter), 0.0), 0.9)
     delay = mon.list("request_delay_seconds", list(s.request_delay_seconds))
     if len(delay) != 2 or not all(isinstance(d, (int, float)) for d in delay) or delay[0] > delay[1]:

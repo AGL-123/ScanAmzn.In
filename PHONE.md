@@ -206,10 +206,12 @@ an hour, healthchecks.io e-mails you, and you can tap **PS5 Start**.
 | **PS5 Test alert** | Sends a test message on every channel you set up. |
 | **PS5 Settings** | Asks the setup questions again. Press Enter to keep an answer, type `-` to remove a channel. Restarts the bot with the new settings. |
 | **PS5 Check now** | Self-test against the real Amazon.in: shows what it finds and whether it would see a restock, and sends the result to Telegram/e-mail (see below). |
-| **PS5 Data saver** | On mobile data, tap this **instead of stopping the bot**: it keeps watching the main cards (Rs.1000 / 2000 / 4000 / 9000) at about a third of the data. Tap it again on Wi-Fi. |
+| **PS5 Extensive mode** | Switches between the default **focused mode** (only the two cards that come back most often, Rs.4000 and Rs.2000, every ~30 s) and the **extensive mode** (every value from Rs.500 to Rs.12,000 plus Amazon searches, every ~60 s). Tap again to switch back. |
+| **PS5 Data saver** | On mobile data, tap this **instead of stopping the bot**: it checks fewer pages, half as often. Tap it again on Wi-Fi. |
 
 The same commands work typed in Termux: `ps5 start`, `ps5 stop`, `ps5 status`,
-`ps5 test`, `ps5 setup`, `ps5 check`, `ps5 saver` (or `ps5 saver on` / `off`),
+`ps5 test`, `ps5 setup`, `ps5 check`, `ps5 extensive` and `ps5 saver` (each
+also with `on` / `off`),
 `ps5 log` (recent log lines),
 `ps5 update` (download the latest version of the bot) and `ps5 export` (see
 below).
@@ -272,15 +274,16 @@ and carries on by itself afterwards). It checks:
 1. that Amazon.in answers (it opens the first gift card page, the same kind of
    page the bot watches), and where Amazon thinks you are (*delivery
    location*);
-2. that the searches return results and which PlayStation gift card listings
-   they found (Amazon hides out-of-stock items from search, so finding none is
-   normal; that's why the bot also watches the known Sony PlayStation Store
-   gift card listings directly: Rs.1000 / 2000 / 4000 / 9000 every check, the
-   other values from Rs.500 to Rs.12,000 two per check in turn, and all of
-   them at once as soon as any card comes back);
-3. that those gift card pages are understood (*unavailable* / *in stock*;
-   *page not found* means Amazon removed that listing) - the main ones and
-   three of the other values, different ones each time;
+2. in the extensive mode only: that the searches return results and which
+   PlayStation gift card listings they found (Amazon hides out-of-stock items
+   from search, so finding none is normal; that's why the bot watches the known
+   Sony PlayStation Store gift card listings directly: Rs.1000 / 2000 / 4000 /
+   9000 every check, the other values from Rs.500 to Rs.12,000 two per check
+   in turn, and all of them at once as soon as any card comes back);
+3. that the gift card pages are understood (*unavailable* / *in stock*; *page
+   not found* means Amazon removed that listing) - in the focused mode the
+   Rs.4000 and Rs.2000 cards, in the extensive mode the main ones and three of
+   the other values, different ones each time;
 4. that an in-stock product is read as **in stock** with its price.
 
 Amazon answers a burst of requests with bot checks, so the bot - the check
@@ -312,13 +315,13 @@ warned if it fails twice in a row.
 ## Mobile data and battery
 
 Every check downloads the Amazon pages it watches, roughly 0.15-0.3 MB each.
-With the default settings (a check every 60 s: four gift card pages plus two
-other values in turn, searches every 3rd check) that is about **1-2.5 GB a
-day**, more while searches keep finding listings. The setup wizard shows the estimate
-for your settings. Use **Wi-Fi** if you can. On mobile data, tap **PS5 Data
-saver** rather than stopping the bot: it then checks only the four main cards,
-half as often (roughly 0.4-0.8 GB a day), with no searches, and still checks
-every value as soon as any card comes back. Tap it again on Wi-Fi. Battery use
+In the default focused mode (two cards every ~30 s) that is about **0.7-1.4 GB
+a day**; in the extensive mode (four cards plus two other values every ~60 s,
+searches every 3rd check) about **1-2.5 GB a day**. Use **Wi-Fi** if you can.
+On mobile data, tap **PS5 Data saver** rather than stopping the bot: it halves
+the checks (focused mode: the two cards every ~60 s, about 0.35-0.7 GB a day;
+extensive mode: only the four main cards and no searches, but every value as
+soon as any card comes back). Tap it again on Wi-Fi. Battery use
 is modest, but keep the phone on the charger if you can.
 
 ## Troubleshooting

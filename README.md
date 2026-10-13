@@ -236,6 +236,15 @@ it runs: a `paused-until` file that the self-test keeps locked, so the pause
 ends as soon as the self-test does (however it ends), and after 10 minutes at
 the most.
 
+**Focused and extensive mode**: by default the monitor watches only
+`[amazon] focus_asins` (`FOCUS_LISTINGS`, the Rs.4000 and Rs.2000 cards that
+come back most often, plus any `asins` you add) every
+`monitor.focus_interval_seconds` (default 30), with no searches and no other
+values. While a file `extensive` exists next to the status file (`ps5
+extensive` / the PS5 Extensive mode button), it watches everything described
+above every `monitor.interval_seconds`. It is read every round. An empty
+`focus_asins` means the extensive mode always.
+
 **Data saver**: while a file `data-saver` exists next to the status file
 (`ps5 saver` on the phone), the monitor checks only `asins` (listings found by
 searches only while in stock, values in turn only right after a restock, no

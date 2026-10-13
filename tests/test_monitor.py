@@ -807,3 +807,54 @@ def test_data_saver_skips_listings_found_by_searches_unless_in_stock(fetcher, di
     fetcher.set_product(ASIN, product_html(TITLE, available=True))  # restock: sweep the other values
     m.run_cycle()
     assert fetcher.product_url("B0ROT00003") in fetcher.requests
+
+
+# --- focused mode (default) and extensive mode ------------------------------------------
+
+
+def focused_monitor(fetcher, dispatcher, clock):
+    m = make_monitor(fetcher, dispatcher, clock,
+                     amazon={"asins": [ASIN], "focus_asins": ["B0FOCUS001", "B0FOCUS002"],
+                             "search_queries": ["psn"]},
+                     monitor={"focus_interval_seconds": 30})
+    m.s.rotating_asins = ["B0ROT00001", "B0ROT00002"]
+    for asin in ("B0FOCUS001", "B0FOCUS002", ASIN, *m.s.rotating_asins):
+        fetcher.set_product(asin, product_html(f"Rs.{asin[-1]}000 PlayStation card", available=False))
+    fetcher.set_search("psn", '<html><body>No results for "psn".</body></html>')
+    return m
+
+
+def test_focused_mode_checks_only_the_focused_cards_more_often(fetcher, dispatcher, clock):
+    m = focused_monitor(fetcher, dispatcher, clock)
+    assert not m.extensive and m.s.focus_asins == ["B0FOCUS001", "B0FOCUS002", ASIN]  # + the user's own
+    report = m.run_cycle()
+    pages = [u.rsplit("/", 1)[1] for u in fetcher.requests]
+    assert pages == ["B0FOCUS001", "B0FOCUS002", ASIN]  # no values in turn, no searches
+    assert 30 * 0.75 <= m.next_wait(report) <= 30 * 1.25
+    assert m.snapshot()["mode"] == "focused" and "focused mode" in m.mode_line()
+
+    fetcher.set_product("B0FOCUS002", product_html("Rs.2000 PlayStation card", available=True, price="₹2,000.00"))
+    fetcher.requests.clear()
+    m.run_cycle()  # a restock: alert, but no sweep of the other values in focused mode
+    assert any("IN STOCK" in x.subject for x in dispatcher.messages)
+    assert not any("B0ROT" in u for u in fetcher.requests) and m.sweep == set()
+
+
+def test_extensive_mode_is_switched_on_by_the_widget_file(fetcher, dispatcher, clock):
+    m = focused_monitor(fetcher, dispatcher, clock)
+    m.extensive_flag.parent.mkdir(parents=True, exist_ok=True)
+    m.extensive_flag.touch()
+    report = m.run_cycle()
+    assert m.extensive and m.snapshot()["mode"] == "extensive"
+    assert fetcher.product_url(ASIN) in fetcher.requests and fetcher.search_url("psn") in fetcher.requests
+    assert any("B0ROT" in u for u in fetcher.requests)
+    assert m.next_wait(report) >= m.s.interval_seconds * 0.75
+    m.extensive_flag.unlink()
+    fetcher.requests.clear()
+    m.run_cycle()
+    assert not m.extensive and fetcher.search_url("psn") not in fetcher.requests
+
+
+def test_no_focus_list_means_always_extensive(fetcher, dispatcher, clock):
+    m = make_monitor(fetcher, dispatcher, clock, **watching())  # test settings: no known listings
+    assert m.s.focus_asins == [] and m.extensive

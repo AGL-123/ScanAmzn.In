@@ -87,8 +87,13 @@ def describe_status_file(path: str | Path, now: datetime | None = None) -> str:
         f"  Last check:  {updated:%d %b %H:%M:%S} ({_ago(age)}), round {data.get('cycle', 0)}",
         f"  Running since {started:%d %b %H:%M}",
     ]
+    if data.get("mode") == "focused":
+        lines.append(f"  Mode:        focused - only the main cards, every ~{data.get('interval_seconds', 30):.0f}s"
+                     " (PS5 Extensive mode: all cards)")
+    elif data.get("mode") == "extensive":
+        lines.append("  Mode:        extensive - every card value plus searches (PS5 Extensive mode again: focused)")
     if data.get("data_saver"):
-        lines.append("  Data saver:  ON - only the main cards, half as often (tap PS5 Data saver to switch off)")
+        lines.append("  Data saver:  ON - fewer pages, half as often (tap PS5 Data saver to switch off)")
     if data.get("last_problem"):
         lines.append(f"  Last problem: {data['last_problem']}")
     control = data.get("selftest") or {}

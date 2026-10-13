@@ -111,6 +111,15 @@ def data_estimate(interval: int, asins: int, queries: int = 2, search_every: int
     return f"Estimated data use: about {low:.1f}-{high:.1f} GB a day. Use Wi-Fi if you can."
 
 
+def focused_estimate(asins: int) -> str:
+    """Rough daily data use in the default focused mode (a few pages, no searches)."""
+    from .config import FOCUS_LISTINGS, Settings
+
+    pages = len(FOCUS_LISTINGS) + asins
+    rounds_per_day = 86400 / (Settings.focus_interval_seconds + 5)
+    return f"{pages * rounds_per_day * 0.15 / 1024:.1f}-{pages * rounds_per_day * 0.3 / 1024:.1f} GB a day"
+
+
 class Wizard:
     def __init__(self, path: Path, ask: Ask = input, ask_secret: Ask = getpass.getpass, out=print,
                  telegram=telegram_api):
@@ -215,21 +224,23 @@ class Wizard:
             raise SystemExit("No alert channel configured - nothing saved. Run setup again.")
 
         out("\n5) WHAT TO WATCH")
-        out("   The Sony PlayStation Store gift card listings are watched automatically: Rs.1000, 2000,")
-        out("   4000 and 9000 every check, the other values (Rs.500-12,000) two per check in turn, and")
-        out("   all of them at once when a card comes back. Searches find others. Optionally add more")
-        out("   product IDs (ASINs, the 10 characters after /dp/ in an Amazon link), separated by commas.")
+        out("   By default the bot watches the two cards that come back most often, Rs.4000 and Rs.2000,")
+        out("   every ~30 seconds (focused mode). The PS5 Extensive mode button switches to every value")
+        out("   (Rs.500-12,000) plus searches, and back. Optionally add more product IDs to watch in both")
+        out("   modes (ASINs, the 10 characters after /dp/ in an Amazon link), separated by commas.")
         asins = self._prompt_until(
             "   ASINs", self._check_asins, default=", ".join(self._old("amazon", "asins", default=[])),
             optional=True,
         )
         interval = self._prompt_until(
-            "   Check every how many seconds (30 or more)",
+            "   In extensive mode, check every how many seconds (30 or more)",
             lambda a: a if a.isdigit() and int(a) >= 30 else None,
             default=str(int(self._old("monitor", "interval_seconds", default=60))),
         )
 
-        out("   " + data_estimate(int(interval), len([a for a in asins.split(",") if a.strip()])))
+        mine = len([a for a in asins.split(",") if a.strip()])
+        out(f"   Estimated data use: focused mode about {focused_estimate(mine)};")
+        out("   extensive mode: " + data_estimate(int(interval), mine).removeprefix("Estimated data use: "))
         out("   Every day the bot can send a short 'still running' message"
             " (by e-mail/Telegram when set up, to spare WhatsApp's small allowance).")
         daily = self._prompt_until(

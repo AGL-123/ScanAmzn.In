@@ -195,9 +195,11 @@ class SelfTest:
         return "\n".join(lines)
 
 
-def first_url(settings, fetcher: Fetcher) -> str:
+def first_url(settings, fetcher: Fetcher, extensive: bool = True) -> str:
     """The page that proves Amazon.in answers: one the monitor really reads.
     (Not the home page - Amazon shows it only to browsers that run JavaScript.)"""
+    if not extensive:
+        return fetcher.product_url(settings.focus_asins[0])
     if settings.asins:
         return fetcher.product_url(settings.asins[0])
     return fetcher.search_url(settings.search_queries[0])  # config requires one or the other
@@ -210,10 +212,11 @@ def run(settings, fetcher: Fetcher, pause: Pause, dump: Dump, progress: Callable
     when misread."""
     test = SelfTest()
     site = RetryingFetcher(fetcher, wait or (lambda s: None), progress)
+    extensive = extensive_mode(settings)
 
     progress("Checking that Amazon.in can be reached...")
     try:
-        first = site.get(first_url(settings, fetcher))
+        first = site.get(first_url(settings, fetcher, extensive))
     except FetchError as exc:
         # No internet proves nothing about page reading: not conclusive.
         test.checks.append(Check("Amazon.in reachable", None, f"no connection - is the internet on? ({exc})"))
@@ -233,8 +236,30 @@ def run(settings, fetcher: Fetcher, pause: Pause, dump: Dump, progress: Callable
         + (f" (needed {site.blocks} retry after a bot check)" if site.blocks else ""),
     ))
 
-    progress("Running the gift card searches...")
     found: dict[str, Product] = {}
+    if extensive:
+        _searches(settings, fetcher, site, pause, dump, progress, test, found)
+
+    progress("Opening the gift card pages...")
+    if extensive:
+        # The listings checked every round, any the searches found, and a few
+        # of those checked in turn (different ones each run: opening all of
+        # them at once is the kind of burst Amazon answers with bot checks).
+        others = random.sample(settings.rotating_asins, min(OTHER_VALUES, len(settings.rotating_asins)))
+        asins = list(dict.fromkeys(settings.asins + list(found) + others))[:MAX_PAGES]
+    else:  # focused mode: the cards the monitor watches
+        asins = list(settings.focus_asins)[:MAX_PAGES]
+    _gift_card_pages(fetcher, site, pause, dump, test, found, asins)
+
+    progress("Checking that an in-stock product is recognised...")
+    control = in_stock_control(site, settings.control_queries, pause, dump)
+    test.checks.append(Check(CONTROL_CHECK, control.ok, control.detail))
+    return test
+
+
+def _searches(settings, fetcher: Fetcher, site: RetryingFetcher, pause: Pause, dump: Dump,
+              progress: Callable[[str], None], test: SelfTest, found: dict[str, Product]) -> None:
+    progress("Running the gift card searches...")
     results, others = 0, []
     misunderstood, blocked_searches, failed_searches = [], [], []
     for query in settings.search_queries:
@@ -288,14 +313,12 @@ def run(settings, fetcher: Fetcher, pause: Pause, dump: Dump, progress: Callable
             f"{results} results, {len(found)} PlayStation gift card listing(s):", lines,
         ))
 
-    progress("Opening the gift card pages...")
-    # The listings checked every round, any the searches found, and a few of
-    # those checked in turn (different ones each run: opening all of them at
-    # once is the kind of burst Amazon answers with bot checks). Saving them
-    # all would make `ps5 export` large: keep the first few (to compare page
-    # layouts) and every page that is not a plain "unavailable".
-    others = random.sample(settings.rotating_asins, min(OTHER_VALUES, len(settings.rotating_asins)))
-    asins = list(dict.fromkeys(settings.asins + list(found) + others))[:MAX_PAGES]
+
+
+def _gift_card_pages(fetcher: Fetcher, site: RetryingFetcher, pause: Pause, dump: Dump, test: SelfTest,
+                     found: dict[str, Product], asins: list[str]) -> None:
+    # Saving every page would make `ps5 export` large: keep the first few (to
+    # compare page layouts) and every page that is not a plain "unavailable".
     page_lines, unreadable, inconclusive, mismatched, in_stock = [], 0, 0, 0, []
     for i, asin in enumerate(asins):
         if pause():
@@ -349,17 +372,18 @@ def run(settings, fetcher: Fetcher, pause: Pause, dump: Dump, progress: Callable
         note = f" - {len(in_stock)} IN STOCK NOW!" if in_stock else ""
         test.checks.append(Check("Gift card pages", True, f"{len(asins)} page(s) understood{note}", page_lines))
 
-    progress("Checking that an in-stock product is recognised...")
-    control = in_stock_control(site, settings.control_queries, pause, dump)
-    test.checks.append(Check(CONTROL_CHECK, control.ok, control.detail))
-    return test
-
 
 def state_dir(settings) -> Path:
     """Where the self-test report and saved pages go (next to the status file)."""
     if settings.status_file:
         return Path(settings.status_file).expanduser().parent
     return Path.home() / ".scanamzn"
+
+
+def extensive_mode(settings) -> bool:
+    """False in the default focused mode: only settings.focus_asins are watched
+    (`ps5 extensive` creates the file that switches to every listing)."""
+    return not settings.focus_asins or (state_dir(settings) / "extensive").exists()
 
 
 def pause_file(settings) -> Path:

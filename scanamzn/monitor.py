@@ -134,6 +134,11 @@ class Monitor:
 
         # Present while the user wants to spare mobile data (`ps5 saver`).
         self.saver_flag = state_dir(settings) / "data-saver"
+        # Present while the user wants every listing watched (`ps5 extensive`);
+        # otherwise only settings.focus_asins ("focused mode").
+        self.extensive_flag = state_dir(settings) / "extensive"
+        self.extensive = self._extensive_now()
+        self._mode_logged = False
         from .selftest import pause_file
 
         self.pause_flag = pause_file(settings)  # written by a running self-test
@@ -154,19 +159,28 @@ class Monitor:
 
     # -- public API ------------------------------------------------------------
     def watch_list(self) -> list[str]:
+        if not self.extensive:
+            return list(self.s.focus_asins)
         return list(dict.fromkeys(self.s.asins + self.discovered))
+
+    def _extensive_now(self) -> bool:
+        return not self.s.focus_asins or self.extensive_flag.exists()
+
+    def mode_line(self) -> str:
+        if not self.extensive:
+            return (f"focused mode: {len(self.s.focus_asins)} card(s) every "
+                    f"~{self.s.focus_interval_seconds:.0f}s (ps5 extensive: all cards)")
+        return (f"extensive mode: {len(self.s.asins)} product(s)"
+                + (f" (+{len(self.s.rotating_asins)} in turn)" if self.s.rotating_asins else "")
+                + f" and {len(self.s.search_queries)} search(es) every ~{self.s.interval_seconds:.0f}s")
 
     def stop(self) -> None:
         self._stop.set()
 
     def run_forever(self, max_runtime_seconds: float | None = None) -> None:
         """Check until stop() is called or ``max_runtime_seconds`` have passed."""
-        log.info(
-            "watching %d product(s)%s and %d search(es) on %s every ~%ds",
-            len(self.s.asins),
-            f" (+{len(self.s.rotating_asins)} in turn)" if self.s.rotating_asins else "",
-            len(self.s.search_queries), self.s.domain, self.s.interval_seconds,
-        )
+        log.info("watching %s - %s", self.s.domain, self.mode_line())
+        self._mode_logged = True
         deadline = self.clock() + max_runtime_seconds if max_runtime_seconds else math.inf
         self.write_status_file()  # "starting": the first round can take a while
         while not self._stop.is_set():
@@ -239,8 +253,11 @@ class Monitor:
             return wait
         self.block_streak = 0
         j = self.s.jitter
-        wait = self.s.interval_seconds * self.rng.uniform(1 - j, 1 + j)
+        wait = self.base_interval() * self.rng.uniform(1 - j, 1 + j)
         return wait * 2 if self.saver else wait
+
+    def base_interval(self) -> float:
+        return self.s.interval_seconds if self.extensive else self.s.focus_interval_seconds
 
     def run_cycle(self) -> CycleReport:
         self.cycle += 1
@@ -251,9 +268,13 @@ class Monitor:
         saver = self.saver_flag.exists()
         if saver != self.saver:
             self.saver = saver
-            log.info("data saver %s", "ON: only the main cards, half as often" if saver else "OFF: checking everything")
+            log.info("data saver %s", "ON: fewer pages, half as often" if saver else "OFF")
+        extensive = self._extensive_now()
+        if extensive != self.extensive:
+            self.extensive = extensive
+            log.info("now in %s", self.mode_line())
 
-        if self.saver:  # the main cards; listings found by searches only while in stock
+        if self.extensive and self.saver:  # main cards; search finds only while in stock
             watched = self.s.asins + [a for a in self.discovered if a in self.items and self.items[a].in_stock]
         else:
             watched = self.watch_list()
@@ -264,6 +285,10 @@ class Monitor:
             checked[asin] = product
             if product.status is Status.BLOCKED and self._stop_for_block(report, asin):
                 return report
+
+        if not self.extensive:  # focused mode: just those cards, no other values, no searches
+            self.sweep.clear()
+            return report
 
         # The other known gift card values come before the searches: they matter
         # more. Data saver: only cards in stock and the sweep after a restock.
@@ -826,7 +851,8 @@ class Monitor:
             "updated_at": self.wall().isoformat(timespec="seconds"),
             "started_at": self.started_at.isoformat(timespec="seconds"),
             "cycle": self.cycle,
-            "interval_seconds": self.s.interval_seconds,
+            "interval_seconds": self.base_interval(),
+            "mode": "extensive" if self.extensive else "focused",
             "next_check_in_seconds": round(next_check_in) if next_check_in is not None else None,
             "blocked_streak": self.block_streak,
             "checks_failing": self.health_alerted,

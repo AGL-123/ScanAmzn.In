@@ -16,6 +16,10 @@ asins = [
     # "B0XXXXXXXX",  # PlayStation Network Wallet Top-Up ₹1000
 ]
 
+# Default "focused mode": only these (plus the asins above), every
+# monitor.focus_interval_seconds. `ps5 extensive` switches to everything.
+# focus_asins = ["B07K6RYVJ5", "B093QF35KZ"]
+
 # Searches run every cycle (see monitor.search_every_cycles). Matching listings
 # (see [filter]) are watched automatically, and an in-stock hit is confirmed on
 # its product page before you are alerted. A full https:// search URL also works.
@@ -48,6 +52,8 @@ search_every_cycles = 1
 # The built-in gift card values that are not checked every round: how many of
 # them to check per round, in turn (all of them right after any restock).
 other_listings_per_round = 2
+# Focused mode checks only a few cards, so it can check more often.
+focus_interval_seconds = 30
 # Amazon answers bursts of requests with bot checks. At most this many requests
 # in any 60 seconds, shared by the monitor and the self-test. 0 = no limit.
 max_requests_per_minute = 8
