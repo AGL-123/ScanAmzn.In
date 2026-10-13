@@ -531,13 +531,13 @@ def test_a_sweep_cut_short_by_a_bot_check_continues_next_round(fetcher, dispatch
     for asin in ("B0ROT00001", "B0ROT00002"):  # two bot checks in a row: the session is blocked
         fetcher.set_product(asin, fixture("aws_waf_challenge.html"), status=202)
     report = m.run_cycle()  # restock, then bot checks in the middle of the sweep
-    assert report.blocked and m.sweep == {"B0ROT00002", "B0ROT00003"}
+    assert report.blocked and m.sweep == {"B0ROT00001", "B0ROT00002", "B0ROT00003"}  # none read yet
     fetcher.requests.clear()
     for asin in ("B0ROT00001", "B0ROT00002"):
         fetcher.set_product(asin, product_html("PlayStation card", available=False))
-    m.run_cycle()  # the page that stopped the round comes last now
-    assert [u.rsplit("/", 1)[1] for u in fetcher.requests] == [ASIN, "B0ROT00003", "B0ROT00002"]
-    assert m.sweep == set() and "B0ROT00002" not in m.suspect  # it loaded, so it's back to normal
+    m.run_cycle()  # the pages that showed a bot check come last now
+    assert [u.rsplit("/", 1)[1] for u in fetcher.requests] == [ASIN, "B0ROT00003", "B0ROT00001", "B0ROT00002"]
+    assert m.sweep == set() and not m.suspect & {"B0ROT00001", "B0ROT00002"}  # they loaded: back to normal
 
 
 def test_changed_page_alert_survives_a_404_in_between(fetcher, dispatcher, clock):
@@ -626,3 +626,71 @@ def test_a_rotating_listing_that_alone_shows_a_bot_check_does_not_stall_the_swee
     m.run_cycle()
     m.run_cycle()
     assert fetcher.product_url("B0ROT00002") in fetcher.requests  # rotation goes on
+
+
+
+# --- review findings on the bot-check guard ---------------------------------------------
+
+
+def test_a_skipped_page_met_again_in_search_does_not_stop_the_round(fetcher, dispatcher, clock):
+    m = make_monitor(fetcher, dispatcher, clock,
+                     amazon={"asins": ["B0PSN02000", "B0PSN01000"], "search_queries": ["playstation gift card"]})
+    fetcher.set_product("B0PSN02000", product_html("Rs.2000 PlayStation card", available=False))
+    fetcher.set_product("B0PSN01000", fixture("aws_waf_challenge.html"), status=202)  # skipped
+    fetcher.set_search("playstation gift card", fixture("search_results.html"))  # shows B0PSN01000 with a price
+    report = m.run_cycle()
+    assert not report.blocked and report.errors == 1
+    assert any("search page" in x.body for x in dispatcher.messages)  # trusted the search result
+
+
+def test_a_card_skipped_in_the_sweep_is_retried_next_round(fetcher, dispatcher, clock):
+    m = rotating_monitor(fetcher, dispatcher, clock)
+    m.run_cycle()
+    fetcher.set_product(ASIN, product_html(TITLE, available=True))
+    fetcher.set_product("B0ROT00002", fixture("aws_waf_challenge.html"), status=202)  # a one-off
+    assert not m.run_cycle().blocked
+    assert m.sweep == {"B0ROT00002"}
+    fetcher.set_product("B0ROT00002", product_html("Rs.2000 PlayStation card", available=True, price="₹2,000.00"))
+    fetcher.requests.clear()
+    m.run_cycle()
+    assert fetcher.product_url("B0ROT00002") in fetcher.requests and m.sweep == set()
+    assert any("Rs.2000" in x.subject for x in dispatcher.messages)
+
+
+def test_a_card_that_keeps_showing_a_bot_check_leaves_the_sweep(fetcher, dispatcher, clock):
+    m = rotating_monitor(fetcher, dispatcher, clock)
+    fetcher.set_product("B0ROT00002", fixture("aws_waf_challenge.html"), status=202)
+    m.run_cycle()
+    fetcher.set_product(ASIN, product_html(TITLE, available=True))
+    for _ in range(3):
+        m.run_cycle()
+    assert m.sweep == set()  # no stall: the normal turns go on
+
+
+def test_blocked_searches_rest_while_product_pages_keep_being_checked(fetcher, dispatcher, clock):
+    m = make_monitor(fetcher, dispatcher, clock,
+                     amazon={"asins": [ASIN], "search_queries": ["psn", "playstation gift card"]})
+    m.s.rotating_asins = ["B0ROT00001", "B0ROT00002"]
+    m.s.other_listings_per_round = 1
+    fetcher.set_product(ASIN, product_html(TITLE, available=False))
+    for asin in m.s.rotating_asins:
+        fetcher.set_product(asin, product_html("PlayStation card", available=False))
+    for q in ("psn", "playstation gift card"):
+        fetcher.set_search(q, fixture("aws_waf_challenge.html"), status=202)
+    report = m.run_cycle()
+    assert not report.blocked and set(m.search_rest) == {"psn", "playstation gift card"}
+    assert m.next_wait(report) <= m.s.interval_seconds * 1.5  # no back-off for the whole bot
+    fetcher.requests.clear()
+    clock.advance(45)
+    m.run_cycle()  # searches rest; product pages go on
+    assert not any("/s?" in u for u in fetcher.requests) and fetcher.product_url(ASIN) in fetcher.requests
+    fetcher.set_search("psn", '<html><body>No results for "psn".</body></html>')
+    clock.advance(10 * 60)
+    m.run_cycle()
+    assert "psn" not in m.search_rest  # loaded again
+
+
+def test_blocked_search_with_no_product_page_loaded_backs_off(fetcher, dispatcher, clock):
+    m = make_monitor(fetcher, dispatcher, clock, amazon={"search_queries": ["psn"]})
+    fetcher.set_search("psn", fixture("aws_waf_challenge.html"), status=202)
+    assert m.run_cycle().blocked

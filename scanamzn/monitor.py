@@ -113,11 +113,14 @@ class Monitor:
         # Other values still to check after a restock; survives a round cut
         # short by a bot check.
         self.sweep: set[str] = set()
-        # Pages that alone showed a bot check while the others loaded fine
-        # (e.g. a broken listing): checked last, so they can't stop the round.
+        # Product pages that showed a bot check: checked last until they load,
+        # so one broken listing can't stop the round.
         self.suspect: set[str] = set()
+        # Searches that got a bot check while product pages loaded:
+        # query -> (times in a row, resting until clock()).
+        self.search_rest: dict[str, tuple[int, float]] = {}
         self._loaded_in_round = 0
-        self._skipped_block = False
+        self._blocks_in_round: set[str] = set()
         self.cycle = 0
         self.block_streak = 0
         self.last_success = clock()
@@ -199,18 +202,21 @@ class Monitor:
     def run_cycle(self) -> CycleReport:
         self.cycle += 1
         self._requests_in_cycle = 0
-        self._loaded_in_round, self._skipped_block = 0, False
+        self._loaded_in_round, self._blocks_in_round = 0, set()
         report = CycleReport()
         checked: dict[str, Product] = {}
 
-        watched = self.watch_list()
-        for asin in sorted(watched, key=lambda a: a in self.suspect):
+        for asin in sorted(self.watch_list(), key=lambda a: a in self.suspect):
             if self._stop.is_set():
                 return report
             product = self._check_product(asin, report)
             checked[asin] = product
             if product.status is Status.BLOCKED and self._stop_for_block(report, asin):
                 return report
+
+        # The other known gift card values come before the searches: they matter more.
+        if not self._check_other_values(report, checked, pick=True):
+            return report
 
         # Search every round when no product pages are watched (searches are
         # then the only way to see a restock), else every search_every_cycles.
@@ -220,45 +226,60 @@ class Monitor:
             for query in self.s.search_queries:
                 if self._stop.is_set():
                     return report
+                if self._search_resting(query):
+                    continue
                 page = self._search(query, report)
                 if page is None:
                     continue
                 if page.blocked:
-                    if self._stop_for_block(report, f"search {query!r}"):
+                    if self._search_blocked(report, query):
                         return report
                     continue
                 self._handle_search_results(page, checked, report)
                 if report.blocked:
                     return report
+            # A restock the searches found: check the other values right away too.
+            if self.sweep and not self._check_other_values(report, checked, pick=False):
+                return report
+        return report
 
-        # The other gift card values: one per round in turn. After any card
-        # comes back in stock, all of them (restocks often come together); a
-        # card in stock is checked every round until it sells out.
-        rotating = [a for a in self.s.rotating_asins if a not in checked and a not in self.discovered]
-        done = set(checked)
-        self.sweep &= set(rotating)  # the rest were checked this round or are watched every round
-        batch = [a for a in rotating if a in self.sweep or (a in self.items and self.items[a].in_stock)]
-        waiting = [a for a in rotating if a not in batch]
-        if not self.sweep:  # the next ones after the last turn, in list order
+    def _check_other_values(self, report: CycleReport, checked: dict[str, Product], pick: bool) -> bool:
+        """The values not checked every round (settings.rotating_asins):
+        other_listings_per_round of them in turn (``pick``), any in stock, and
+        all of them right after any card came back (``self.sweep``, kept until
+        done - a bot check doesn't lose it). False when the round must stop."""
+        rotating = [a for a in self.s.rotating_asins if a not in self.discovered]
+        self.sweep &= set(rotating)  # discovered ones are checked every round anyway
+        self.sweep -= {a for a, p in checked.items() if p.status is not Status.BLOCKED}
+        todo = [a for a in rotating if a not in checked]
+        batch = [a for a in todo if a in self.sweep or (a in self.items and self.items[a].in_stock)]
+        if pick and not self.sweep:  # the next ones after the last turn, in list order
             order = self.s.rotating_asins
+            waiting = [a for a in todo if a not in batch]
             for _ in range(min(self.s.other_listings_per_round, len(waiting))):
                 start = self.rotation % len(order)
-                pick = next(a for a in order[start:] + order[:start] if a in waiting and a not in batch)
-                self.rotation = order.index(pick) + 1
-                batch.append(pick)
+                choice = next(a for a in order[start:] + order[:start] if a in waiting and a not in batch)
+                self.rotation = order.index(choice) + 1
+                batch.append(choice)
         batch.sort(key=lambda a: a in self.suspect)
+        suspect_before = set(self.suspect)
         i = 0
         while i < len(batch):
             asin = batch[i]
             i += 1
             if self._stop.is_set():
-                return report
-            if self._check_product(asin, report).status is Status.BLOCKED and self._stop_for_block(report, asin):
-                return report
-            done.add(asin)
-            self.sweep -= done
-            batch += [a for a in rotating if a in self.sweep and a not in batch]  # a restock just now
-        return report
+                return False
+            product = self._check_product(asin, report)
+            checked[asin] = product
+            if product.status is Status.BLOCKED:
+                if self._stop_for_block(report, asin):
+                    return False
+                if asin not in suspect_before:
+                    continue  # stays in the sweep: one more try next round (checked last)
+            self.sweep -= {a for a, p in checked.items() if p.status is not Status.BLOCKED}
+            self.sweep.discard(asin)  # also a page that keeps showing a bot check: don't stall
+            batch += [a for a in todo if a in self.sweep and a not in batch]  # a restock just now
+        return True
 
     def _stop_for_block(self, report: CycleReport, what: str) -> bool:
         """A bot check normally covers the whole session: stop the round and
@@ -266,17 +287,39 @@ class Monitor:
         more likely that page alone (a broken listing, say): skip it. Either
         way the page is checked last from then on (until it loads), so a page
         like that can't keep the other listings from being checked - not even
-        when it comes first. A second one in the same round stops the round."""
+        when it comes first. A second page with one in the same round stops
+        the round; the same page met again (via a search result) doesn't."""
+        if what in self._blocks_in_round:
+            return False
         known = what in self.suspect
         self.suspect.add(what)
-        if self._loaded_in_round and not self._skipped_block:
-            self._skipped_block = True
+        skip = bool(self._loaded_in_round) and not self._blocks_in_round
+        self._blocks_in_round.add(what)
+        if skip:
             report.errors += 1
             if not known:
                 log.warning("%s: Amazon showed a bot check for this page only; skipping it this round", what)
             return False
         report.blocked = True
         return True
+
+    def _search_blocked(self, report: CycleReport, query: str) -> bool:
+        """Amazon may challenge search pages while serving product pages. If
+        product pages loaded this round, rest just this search (for longer each
+        time) instead of backing off the whole bot. True: stop the round."""
+        if not self._loaded_in_round:
+            report.blocked = True
+            return True
+        strikes = self.search_rest.get(query, (0, 0.0))[0] + 1
+        rest = min(self.s.interval_seconds * 2**strikes, self.s.max_backoff_seconds)
+        self.search_rest[query] = (strikes, self.clock() + rest)
+        report.errors += 1
+        log.warning("search %r: Amazon showed a bot check; resting this search for %.0fs", query, rest)
+        return False
+
+    def _search_resting(self, query: str) -> bool:
+        entry = self.search_rest.get(query)
+        return entry is not None and self.clock() < entry[1]
 
     # -- checks ----------------------------------------------------------------
     def _pause(self) -> None:
@@ -319,7 +362,7 @@ class Monitor:
             self.last_problem = "captcha/robot check"
             return result
         self._loaded_in_round += 1
-        self.suspect.discard(f"search {query!r}")
+        self.search_rest.pop(query, None)
         if not result.layout_ok:
             report.errors += 1
             self.last_problem = f"search page not understood (HTTP {page.status_code})"
