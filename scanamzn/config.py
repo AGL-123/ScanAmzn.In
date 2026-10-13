@@ -171,8 +171,10 @@ class Settings:
     max_discovered: int = 15
     realert_cooldown_minutes: float = 10.0
     notify_when_sold_out: bool = False
-    health_alert_after_minutes: float = 30.0
-    max_backoff_seconds: float = 900.0
+    health_alert_after_minutes: float = 10.0
+    # After a bot check: retry after 60 s, 120 s, ... at most this long. Short:
+    # a single retry request costs nothing, and every minute unchecked counts.
+    max_backoff_seconds: float = 180.0
     debug_dump_dir: str = ""
     log_file: str = ""
     # Hour of day (0-23, local time) for a daily "still running" message; -1 disables.

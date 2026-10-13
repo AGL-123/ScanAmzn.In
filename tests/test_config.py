@@ -100,11 +100,13 @@ def test_fetcher_sends_a_current_consistent_chrome_identity(monkeypatch):
         platform = h["sec-ch-ua-platform"].strip('"')
         assert {"Windows": "Windows NT", "macOS": "Mac OS X", "Linux": "Linux"}[platform] in h["User-Agent"]
 
-    # No warm-up request: a new session makes no request of its own (recorded,
-    # not raised - the old warm-up swallowed exceptions).
+    # The client-hints profile makes no warm-up request of its own (recorded,
+    # not raised - the warm-up swallows exceptions).
     calls = []
     monkeypatch.setattr(requests.Session, "request", lambda self, *a, **k: calls.append(a))
-    session = fetcher_mod.Fetcher(backend="requests")._new_session()
+    f = fetcher_mod.Fetcher(backend="requests")
+    f.profile_index = fetcher_mod.PROFILES.index("client-hints")
+    session = f._new_session()
     assert calls == [] and session.headers["sec-ch-ua-mobile"] == "?0"
 
 

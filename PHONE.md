@@ -230,8 +230,9 @@ below).
 * **✅ PS5 gift card monitor is running** every day at 9:00 (your time). If it doesn't
   arrive one morning, Android has probably closed Termux: open **PS5 Status**,
   tap **PS5 Start**, and recheck Step 5.
-* **⚠️ ScanAmzn cannot check Amazon.in** if checks keep failing for 30 minutes
-  (no internet, or Amazon showing captchas). You get **✅ … checking Amazon.in
+* **⚠️ ScanAmzn cannot check Amazon.in** if checks keep failing for 10 minutes
+  (no internet, or Amazon showing bot checks), so you can watch the cards
+  yourself meanwhile. You get **✅ … checking Amazon.in
   again** when it recovers.
 
 * **⚠️ PS5 monitor may miss restocks** if the bot's regular self-test (below)
@@ -342,9 +343,13 @@ is modest, but keep the phone on the charger if you can.
 * **PS5 Status says NOT RUNNING**: tap **PS5 Start**. If it keeps stopping by
   itself, Android is killing Termux. Redo Step 5. When Android kills Termux,
   it does not restart by itself until you open it.
-* **"Amazon is showing a captcha" / "bot check" in the status or log**: the bot
-  waits and retries by itself, and a block right after starting is common. If
-  it happens a lot, type `ps5 boost` (Wi-Fi recommended, 5-10 minutes). It
+* **"Amazon showed a bot check" in the status or log**: Amazon is refusing the
+  bot's request for a moment. The bot tries again after 1, 2, then every 3
+  minutes, and after two bot checks in a row it changes how its requests look
+  (*request style* - PS5 Status shows which one works and how many pages it
+  has read). It remembers the style that works, also after a restart. A block
+  right after starting is common. If it happens a lot, type `ps5 boost` (Wi-Fi
+  recommended, 5-10 minutes). It
   installs a network library that looks like the Chrome browser to Amazon,
   which Amazon challenges far less. It tests itself and removes itself again if
   it doesn't work on your phone. **PS5 Check now** then shows *via curl_cffi*

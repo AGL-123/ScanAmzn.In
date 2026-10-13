@@ -33,9 +33,14 @@ Every ~45 seconds (randomised), the bot:
    A watched card that comes back at such a price sends an *IN STOCK above your
    price limit* alert (at most hourly); resellers' listings that are always in
    stock at a markup stay quiet. When the price drops to normal, it alerts.
-5. **Backs off when Amazon shows a captcha.** It starts a fresh session with a
-   different browser fingerprint and waits longer each time (up to 15 minutes).
-   If no check has succeeded for 30 minutes, you get a warning so you know the
+5. **Recovers quickly when Amazon shows a bot check.** It retries after 60 s,
+   120 s, then every `monitor.max_backoff_seconds` (180 s) with a fresh session,
+   and after two bot checks in a row switches its *request style*
+   (`fetcher.PROFILES`: "legacy" - desktop Chrome 140 with a first visit to the
+   home page, the style that ran for hours on a phone without a block - then
+   "plain", then "client-hints"). The style that works is remembered in
+   `request-profile` next to the status file. If no check has succeeded for 10
+   minutes (`health_alert_after_minutes`), you get a warning so you know the
    bot can't see restocks. When checks work again, you get a recovery message.
 
 Alerts are sent on all channels in parallel and retried, so a slow mail server

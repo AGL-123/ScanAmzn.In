@@ -94,6 +94,13 @@ def describe_status_file(path: str | Path, now: datetime | None = None) -> str:
         lines.append("  Mode:        extensive - every card value plus searches (PS5 Extensive mode again: focused)")
     if data.get("data_saver"):
         lines.append("  Data saver:  ON - fewer pages, half as often (tap PS5 Data saver to switch off)")
+    if data.get("blocked_streak"):
+        lines.append(f"  Bot checks:  {data['blocked_streak']} in a row - retrying every 1-3 minutes,"
+                     " switching request style")
+    stats = (data.get("request_stats") or {}).get(data.get("request_profile") or "")
+    if stats:
+        lines.append(f"  Requests:    style {data['request_profile']}: {stats['ok']} pages read,"
+                     f" {stats['blocked']} bot check(s) since start")
     if data.get("last_problem"):
         lines.append(f"  Last problem: {data['last_problem']}")
     control = data.get("selftest") or {}

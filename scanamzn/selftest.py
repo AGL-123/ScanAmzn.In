@@ -232,7 +232,8 @@ def run(settings, fetcher: Fetcher, pause: Pause, dump: Dump, progress: Callable
     where = delivery_location(first.text) or "not shown"
     test.checks.append(Check(
         "Amazon.in reachable", True,
-        f"via {fetcher.backend}; Amazon's delivery location: {where}"
+        f"via {fetcher.backend} (request style {getattr(fetcher, 'profile', '?')});"
+        f" Amazon's delivery location: {where}"
         + (f" (needed {site.blocks} retry after a bot check)" if site.blocks else ""),
     ))
 

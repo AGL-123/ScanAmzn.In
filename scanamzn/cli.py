@@ -50,7 +50,8 @@ def _fetcher(s: Settings) -> Fetcher:
     from .selftest import state_dir
 
     budget = RequestBudget(state_dir(s) / "request-times", s.max_requests_per_minute)
-    return Fetcher(s.domain, timeout=s.request_timeout, backend=s.http_backend, proxy=s.proxy, budget=budget)
+    return Fetcher(s.domain, timeout=s.request_timeout, backend=s.http_backend, proxy=s.proxy, budget=budget,
+                   profile_file=state_dir(s) / "request-profile")
 
 
 def _zone_name(s: Settings) -> str:

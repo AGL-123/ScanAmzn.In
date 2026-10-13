@@ -137,8 +137,8 @@ def test_captcha_stops_cycle_backs_off_and_keeps_state(fetcher, dispatcher, cloc
     assert fetcher.requests == [fetcher.product_url(ASIN)]  # stopped after the captcha
     assert m.items[ASIN].in_stock  # a captcha says nothing about stock
 
-    assert m.next_wait(report) == 60  # 30s * 2
-    assert m.next_wait(report) == 120
+    assert 54 <= m.next_wait(report) <= 66  # retry after about a minute, then two, ...
+    assert 108 <= m.next_wait(report) <= 132
     assert fetcher.resets == 2
     waits = [m.next_wait(CycleReport()) for _ in range(20)]
     assert all(30 * 0.75 <= w <= 30 * 1.25 for w in waits)
@@ -149,7 +149,13 @@ def test_backoff_is_capped(fetcher, dispatcher, clock):
     m = make_monitor(fetcher, dispatcher, clock, **watching(max_backoff_seconds=100))
     for _ in range(10):
         wait = m.next_wait(CycleReport(blocked=True))
-    assert wait == 100
+    assert 90 <= wait <= 110
+
+
+def test_waits_after_bot_checks_stay_short_by_default(fetcher, dispatcher, clock):
+    m = make_monitor(fetcher, dispatcher, clock, **watching())
+    waits = [m.next_wait(CycleReport(blocked=True)) for _ in range(8)]
+    assert max(waits) <= 180 * 1.1 and m.s.health_alert_after_minutes == 10
 
 
 def test_network_errors_do_not_change_state(fetcher, dispatcher, clock):

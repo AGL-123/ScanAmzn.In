@@ -247,9 +247,12 @@ class Monitor:
     def next_wait(self, report: CycleReport) -> float:
         if report.blocked:
             self.block_streak += 1
-            self.fetcher.reset()
-            wait = min(self.s.interval_seconds * 2**self.block_streak, self.s.max_backoff_seconds)
-            log.warning("Amazon is showing a captcha; new session, backing off %.0fs", wait)
+            self.fetcher.reset()  # new session; after two in a row, another request style
+            wait = min(60.0 * self.block_streak, self.s.max_backoff_seconds) * self.rng.uniform(0.9, 1.1)
+            log.warning(
+                "Amazon showed a bot check (%d in a row); trying again in %.0fs (request style %s)",
+                self.block_streak, wait, getattr(self.fetcher, "profile", "?"),
+            )
             return wait
         self.block_streak = 0
         j = self.s.jitter
@@ -855,6 +858,8 @@ class Monitor:
             "mode": "extensive" if self.extensive else "focused",
             "next_check_in_seconds": round(next_check_in) if next_check_in is not None else None,
             "blocked_streak": self.block_streak,
+            "request_profile": getattr(self.fetcher, "profile", None),
+            "request_stats": getattr(self.fetcher, "stats", None),
             "checks_failing": self.health_alerted,
             "last_problem": self.last_problem,
             "data_saver": self.saver,
