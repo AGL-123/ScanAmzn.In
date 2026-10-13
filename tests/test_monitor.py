@@ -694,3 +694,50 @@ def test_blocked_search_with_no_product_page_loaded_backs_off(fetcher, dispatche
     m = make_monitor(fetcher, dispatcher, clock, amazon={"search_queries": ["psn"]})
     fetcher.set_search("psn", fixture("aws_waf_challenge.html"), status=202)
     assert m.run_cycle().blocked
+
+
+# --- data saver and the self-test's pause ---------------------------------------------
+
+
+def test_data_saver_checks_only_the_main_cards_half_as_often(fetcher, dispatcher, clock):
+    m = rotating_monitor(fetcher, dispatcher, clock)
+    m.s.search_queries = ["psn"]
+    fetcher.set_search("psn", '<html><body>No results for "psn".</body></html>')
+    m.saver_flag.parent.mkdir(parents=True, exist_ok=True)
+    m.saver_flag.touch()
+    report = m.run_cycle()
+    assert fetcher.requests == [fetcher.product_url(ASIN)]  # no values in turn, no searches
+    assert m.next_wait(report) >= m.s.interval_seconds * 2 * (1 - m.s.jitter)
+    assert m.snapshot()["data_saver"] is True
+
+    fetcher.set_product(ASIN, product_html(TITLE, available=True))  # a restock still sweeps the others
+    fetcher.requests.clear()
+    m.run_cycle()
+    assert {fetcher.product_url(a) for a in ("B0ROT00001", "B0ROT00002", "B0ROT00003")} <= set(fetcher.requests)
+
+    m.saver_flag.unlink()
+    fetcher.requests.clear()
+    m.run_cycle()
+    assert fetcher.search_url("psn") in fetcher.requests and m.saver is False
+
+
+def test_monitor_waits_while_a_self_test_runs(fetcher, dispatcher, clock):
+    from datetime import datetime, timezone
+
+    from scanamzn import selftest
+
+    m = make_monitor(fetcher, dispatcher, clock, **watching())
+    m.wall = lambda: datetime.fromtimestamp(clock(), timezone.utc)
+    m._stop.wait = lambda t: clock.advance(t)
+    fetcher.set_product(ASIN, product_html(TITLE, available=False))
+    m.pause_flag.parent.mkdir(parents=True, exist_ok=True)
+    m.pause_flag.write_text(f"{clock() + 120}\n")
+    start = clock()
+    m.run_forever(max_runtime_seconds=1)
+    assert clock() - start >= 120 and fetcher.requests  # waited, then checked
+
+    m.pause_flag.write_text("garbage")  # unreadable: ignored
+    fetcher.requests.clear()
+    m.run_forever(max_runtime_seconds=1)
+    assert fetcher.requests
+    assert selftest.pause_file(m.s) == m.pause_flag

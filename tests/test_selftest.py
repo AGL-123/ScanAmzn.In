@@ -352,3 +352,33 @@ def test_removed_listing_is_reported_plainly_and_not_as_a_failure(fetcher):
     test = selftest.run(s, fetcher, NO_PAUSE, lambda k, h: None, lambda m: None)
     pages = test.checks[2]
     assert pages.ok is True and any("B0GONE0001  page not found" in line for line in pages.lines)
+
+
+def test_selftest_opens_main_cards_and_only_a_few_values_checked_in_turn(fetcher):
+    fetcher = full_site(fetcher)
+    s = _settings(asins=["B0PSN02000"])
+    s.rotating_asins = [f"B0ROT0000{i}" for i in range(1, 10)]
+    for asin in s.rotating_asins:
+        fetcher.set_product(asin, fixture("product_unavailable.html"))
+    selftest.run(s, fetcher, NO_PAUSE, lambda k, h: None, lambda m: None)
+    opened = {u.rsplit("/", 1)[1] for u in fetcher.requests if "/dp/" in u}
+    assert "B0PSN02000" in opened and len(opened & set(s.rotating_asins)) == selftest.OTHER_VALUES
+
+
+def test_selftest_command_pauses_the_monitor_while_it_runs(cli_env, monkeypatch, tmp_path):
+    from .conftest import FakeFetcher
+
+    monkeypatch.setenv("SCANAMZN_STATUS_FILE", str(tmp_path / "state" / "status.json"))
+    monkeypatch.setenv("SCANAMZN_SEARCH_QUERIES", "playstation gift card")
+    monkeypatch.setattr(cli, "_fetcher", lambda s: full_site(FakeFetcher()))
+    monkeypatch.setattr(cli.time, "sleep", lambda t: None)
+    seen = []
+    real_run = selftest.run
+
+    def run(settings, *a, **kw):
+        seen.append(selftest.pause_file(settings).exists())
+        return real_run(settings, *a, **kw)
+
+    monkeypatch.setattr(selftest, "run", run)
+    cli.main(["selftest"])
+    assert seen == [True] and not (tmp_path / "state" / "paused-until").exists()

@@ -15,6 +15,7 @@ it together with the other checks and gives a verdict:
 
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -27,6 +28,8 @@ CONTROL_QUERIES = ("usb c cable", "a4 notebook", "ballpoint pen")
 CONTROL_CHECK = "In-stock detection"
 BLOCK_RETRY_WAIT = 60  # seconds before retrying with a fresh session
 MAX_PAGES = 20  # gift card pages opened by the self-test
+OTHER_VALUES = 3  # of the values the monitor checks in turn, picked at random each run
+PAUSE_SECONDS = 600  # the monitor's pause during a self-test, at most
 SAVE_FIRST_PAGES = 3  # always saved; later ones only when not plainly "unavailable"
 
 # pause() sleeps between requests and returns True when the caller wants to stop.
@@ -278,10 +281,13 @@ def run(settings, fetcher: Fetcher, pause: Pause, dump: Dump, progress: Callable
         ))
 
     progress("Opening the gift card pages...")
-    # Every listing the monitor watches, also those it checks in turn. Saving
-    # them all would make `ps5 export` large: keep the first few (to compare
-    # page layouts) and every page that is not a plain "unavailable".
-    asins = list(dict.fromkeys(settings.asins + list(found) + settings.rotating_asins))[:MAX_PAGES]
+    # The listings checked every round, any the searches found, and a few of
+    # those checked in turn (different ones each run: opening all of them at
+    # once is the kind of burst Amazon answers with bot checks). Saving them
+    # all would make `ps5 export` large: keep the first few (to compare page
+    # layouts) and every page that is not a plain "unavailable".
+    others = random.sample(settings.rotating_asins, min(OTHER_VALUES, len(settings.rotating_asins)))
+    asins = list(dict.fromkeys(settings.asins + list(found) + others))[:MAX_PAGES]
     page_lines, unreadable, inconclusive, mismatched, in_stock = [], 0, 0, 0, []
     for i, asin in enumerate(asins):
         if pause():
@@ -346,6 +352,30 @@ def state_dir(settings) -> Path:
     if settings.status_file:
         return Path(settings.status_file).expanduser().parent
     return Path.home() / ".scanamzn"
+
+
+def pause_file(settings) -> Path:
+    """While it exists (and its time hasn't passed), the running monitor waits:
+    the self-test's own requests plus the monitor's would be a burst."""
+    return state_dir(settings) / "paused-until"
+
+
+def pause_monitor(settings, seconds: float) -> None:
+    import time
+
+    try:
+        path = pause_file(settings)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"{time.time() + seconds:.0f}\n", encoding="ascii")
+    except OSError:
+        pass  # the request budget still keeps the two apart
+
+
+def resume_monitor(settings) -> None:
+    try:
+        pause_file(settings).unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def debug_dir(settings) -> Path:

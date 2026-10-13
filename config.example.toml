@@ -48,6 +48,9 @@ search_every_cycles = 1
 # The built-in gift card values that are not checked every round: how many of
 # them to check per round, in turn (all of them right after any restock).
 other_listings_per_round = 2
+# Amazon answers bursts of requests with bot checks. At most this many requests
+# in any 60 seconds, shared by the monitor and the self-test. 0 = no limit.
+max_requests_per_minute = 8
 # Maximum number of listings auto-watched from search results.
 max_discovered = 15
 # After an alert, ignore the same item going out of and back into stock for this long.

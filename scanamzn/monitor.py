@@ -129,6 +129,15 @@ class Monitor:
         self._requests_in_cycle = 0
         self._dumped: set[str] = set()
         self._stop = threading.Event()
+        fetcher.wait = self._stop.wait  # waiting for the request budget ends on stop()
+        from .selftest import state_dir  # local import: selftest imports this module's helpers
+
+        # Present while the user wants to spare mobile data (`ps5 saver`).
+        self.saver_flag = state_dir(settings) / "data-saver"
+        from .selftest import pause_file
+
+        self.pause_flag = pause_file(settings)  # written by a running self-test
+        self.saver = False
         self.wall = wall or (lambda: datetime.now(settings.tz))
         self.started_at = self.wall()
         self.stats = _Stats()
@@ -161,6 +170,9 @@ class Monitor:
         deadline = self.clock() + max_runtime_seconds if max_runtime_seconds else math.inf
         self.write_status_file()  # "starting": the first round can take a while
         while not self._stop.is_set():
+            self._wait_while_paused()
+            if self._stop.is_set():
+                break
             started = self.clock()
             try:
                 report = self.run_cycle()
@@ -188,6 +200,27 @@ class Monitor:
                 break
             self._stop.wait(min(wait, remaining))
 
+    def _wait_while_paused(self) -> None:
+        """`PS5 Check now` makes its own requests and asks the monitor to wait
+        meanwhile, with an expiry time, so a check that dies can't keep the
+        monitor paused for long."""
+        paused = False
+        while not self._stop.is_set():
+            try:
+                until = float(self.pause_flag.read_text(encoding="ascii"))
+            except (OSError, ValueError):
+                break
+            left = until - self.wall().timestamp()
+            if left <= 0:
+                break
+            if not paused:
+                paused = True
+                log.info("paused while the self-test runs (at most %.0f s)", left)
+                self.write_status_file(next_check_in=left)
+            self._stop.wait(min(left, 5.0))
+        if paused:
+            log.info("self-test done; checking again")
+
     def next_wait(self, report: CycleReport) -> float:
         if report.blocked:
             self.block_streak += 1
@@ -197,7 +230,8 @@ class Monitor:
             return wait
         self.block_streak = 0
         j = self.s.jitter
-        return self.s.interval_seconds * self.rng.uniform(1 - j, 1 + j)
+        wait = self.s.interval_seconds * self.rng.uniform(1 - j, 1 + j)
+        return wait * 2 if self.saver else wait
 
     def run_cycle(self) -> CycleReport:
         self.cycle += 1
@@ -205,6 +239,10 @@ class Monitor:
         self._loaded_in_round, self._blocks_in_round = 0, set()
         report = CycleReport()
         checked: dict[str, Product] = {}
+        saver = self.saver_flag.exists()
+        if saver != self.saver:
+            self.saver = saver
+            log.info("data saver %s", "ON: only the main cards, half as often" if saver else "OFF: checking everything")
 
         for asin in sorted(self.watch_list(), key=lambda a: a in self.suspect):
             if self._stop.is_set():
@@ -214,14 +252,17 @@ class Monitor:
             if product.status is Status.BLOCKED and self._stop_for_block(report, asin):
                 return report
 
-        # The other known gift card values come before the searches: they matter more.
-        if not self._check_other_values(report, checked, pick=True):
+        # The other known gift card values come before the searches: they matter
+        # more. Data saver: only cards in stock and the sweep after a restock.
+        if not self._check_other_values(report, checked, pick=not self.saver):
             return report
 
         # Search every round when no product pages are watched (searches are
-        # then the only way to see a restock), else every search_every_cycles.
+        # then the only way to see a restock), else every search_every_cycles
+        # (never in data saver mode).
         if self.s.search_queries and (
-            not self.watch_list() or (self.cycle - 1) % self.s.search_every_cycles == 0
+            not self.watch_list()
+            or (not self.saver and (self.cycle - 1) % self.s.search_every_cycles == 0)
         ):
             for query in self.s.search_queries:
                 if self._stop.is_set():
@@ -775,6 +816,7 @@ class Monitor:
             "blocked_streak": self.block_streak,
             "checks_failing": self.health_alerted,
             "last_problem": self.last_problem,
+            "data_saver": self.saver,
             "selftest": self.control,
             "items": items,
         }

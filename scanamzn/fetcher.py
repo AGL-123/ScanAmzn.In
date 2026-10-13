@@ -10,9 +10,14 @@ from __future__ import annotations
 
 import logging
 import random
+import time
 from dataclasses import dataclass
 from datetime import date
+from typing import TYPE_CHECKING, Any, Callable
 from urllib.parse import quote_plus
+
+if TYPE_CHECKING:
+    from .budget import RequestBudget
 
 log = logging.getLogger(__name__)
 
@@ -98,6 +103,7 @@ class Fetcher:
         timeout: float = 20.0,
         backend: str = "auto",
         proxy: str = "",
+        budget: RequestBudget | None = None,
     ):
         self.domain = domain
         self.timeout = timeout
@@ -112,6 +118,11 @@ class Fetcher:
         # Random start, so every run doesn't open with the same fingerprint.
         self._rotation = random.randrange(len(_IMPERSONATE) * len(_PLATFORMS))
         self._session = None
+        # At most so many requests a minute, shared with the other bot processes.
+        self.budget = budget
+        # Waits for the budget; the monitor swaps in its stop event's wait, so
+        # stopping isn't held up (a true result means: give up).
+        self.wait: Callable[[float], Any] = time.sleep
         log.debug("HTTP backend: %s", backend)
 
     # -- URLs ---------------------------------------------------------------
@@ -163,6 +174,8 @@ class Fetcher:
         self._session = None
 
     def get(self, url: str) -> Page:
+        if self.budget is not None and not self.budget.acquire(self.wait):
+            raise FetchError("stopped while pacing requests")
         if self._session is None:
             self._session = self._new_session()
         try:

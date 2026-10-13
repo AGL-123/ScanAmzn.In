@@ -141,8 +141,8 @@ the Telegram message arrive. Finally, answer yes to **start the monitor**.
 2. Find **Termux** (Play Store version) or **Termux:Widget** (F-Droid), and drag
    the widget onto the home screen.
 3. It lists the buttons: **PS5 Start**, **PS5 Stop**, **PS5 Status**,
-   **PS5 Test alert**, **PS5 Settings** and **PS5 Check now**. Tap the widget's
-   refresh icon if they don't show up yet.
+   **PS5 Test alert**, **PS5 Settings**, **PS5 Check now** and **PS5 Data
+   saver**. Tap the widget's refresh icon if they don't show up yet.
 4. Allow Termux to **display over other apps** (Settings → Apps → Termux →
    *Display over other apps* → Allow). Without it the buttons only open after
    you tap the Termux notification.
@@ -206,9 +206,11 @@ an hour, healthchecks.io e-mails you, and you can tap **PS5 Start**.
 | **PS5 Test alert** | Sends a test message on every channel you set up. |
 | **PS5 Settings** | Asks the setup questions again. Press Enter to keep an answer, type `-` to remove a channel. Restarts the bot with the new settings. |
 | **PS5 Check now** | Self-test against the real Amazon.in: shows what it finds and whether it would see a restock, and sends the result to Telegram/e-mail (see below). |
+| **PS5 Data saver** | On mobile data, tap this **instead of stopping the bot**: it keeps watching the main cards (Rs.1000 / 2000 / 4000 / 9000) at about a third of the data. Tap it again on Wi-Fi. |
 
 The same commands work typed in Termux: `ps5 start`, `ps5 stop`, `ps5 status`,
-`ps5 test`, `ps5 setup`, `ps5 check`, `ps5 log` (recent log lines),
+`ps5 test`, `ps5 setup`, `ps5 check`, `ps5 saver` (or `ps5 saver on` / `off`),
+`ps5 log` (recent log lines),
 `ps5 update` (download the latest version of the bot) and `ps5 export` (see
 below).
 
@@ -264,7 +266,8 @@ real site: it picks an everyday product (such as a USB cable) that Amazon.in
 shows with a price, opens its page, and checks that it reads it as **in
 stock**.
 
-**Tap PS5 Check now** (takes about a minute). It checks:
+**Tap PS5 Check now** (takes 1-3 minutes; the running bot pauses meanwhile
+and carries on by itself afterwards). It checks:
 
 1. that Amazon.in answers (it opens the first gift card page, the same kind of
    page the bot watches), and where Amazon thinks you are (*delivery
@@ -275,12 +278,14 @@ stock**.
    gift card listings directly: Rs.1000 / 2000 / 4000 / 9000 every check, the
    other values from Rs.500 to Rs.12,000 two per check in turn, and all of
    them at once as soon as any card comes back);
-3. that all those gift card pages are understood (*unavailable* / *in stock*;
-   *page not found* means Amazon removed that listing);
+3. that those gift card pages are understood (*unavailable* / *in stock*;
+   *page not found* means Amazon removed that listing) - the main ones and
+   three of the other values, different ones each time;
 4. that an in-stock product is read as **in stock** with its price.
 
-If Amazon asks for a bot check, it waits a minute and retries with a fresh
-session (up to twice), so a check can take 2-3 minutes. (The bot never opens
+Amazon answers a burst of requests with bot checks, so the bot - the check
+included - never sends more than 8 requests a minute. If Amazon still asks for
+a bot check, it waits a minute and retries with a fresh session (up to twice). (The bot never opens
 Amazon's home page: Amazon now shows it only to browsers that run JavaScript.
 The product and search pages the bot reads are not affected.) It ends with one
 of three results, also sent to Telegram (and e-mail):
@@ -310,9 +315,11 @@ Every check downloads the Amazon pages it watches, roughly 0.15-0.3 MB each.
 With the default settings (a check every 60 s: four gift card pages plus two
 other values in turn, searches every 3rd check) that is about **1-2.5 GB a
 day**, more while searches keep finding listings. The setup wizard shows the estimate
-for your settings. Use **Wi-Fi** if you can, or choose a longer interval in
-**PS5 Settings** (120 s roughly halves it). Battery use is modest, but keep the
-phone on the charger if you can.
+for your settings. Use **Wi-Fi** if you can. On mobile data, tap **PS5 Data
+saver** rather than stopping the bot: it then checks only the four main cards,
+half as often (roughly 0.4-0.8 GB a day), with no searches, and still checks
+every value as soon as any card comes back. Tap it again on Wi-Fi. Battery use
+is modest, but keep the phone on the charger if you can.
 
 ## Troubleshooting
 

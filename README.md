@@ -226,6 +226,19 @@ to ₹12,000) `monitor.other_listings_per_round` (default 2) per round in turn -
 all of them at once in a round where any card has just come back in stock,
 since restocks often come together.
 
+Amazon answers bursts with bot checks (on the phone, the 12th request within
+about 40 seconds was challenged) but lets a steady few pages a minute through
+for hours. So every bot process - monitor, self-test, in-stock check - draws
+from one budget of `monitor.max_requests_per_minute` (default 8), kept in a
+file next to the status file. The self-test also opens only the main cards and
+three of the values checked in turn, and asks a running monitor to pause while
+it runs (a `paused-until` file that expires by itself after 10 minutes).
+
+**Data saver**: while a file `data-saver` exists next to the status file
+(`ps5 saver` on the phone), the monitor checks only `asins` (no values in turn
+except right after a restock, no searches) and waits twice as long between
+rounds. It is read every round, so switching needs no restart.
+
 The running monitor repeats the positive control every
 `monitor.selftest_every_hours` (default 6). It warns after two failures in a
 row, and reports the last result in the daily status message and in `status`.

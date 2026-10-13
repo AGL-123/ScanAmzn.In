@@ -89,7 +89,9 @@ def make_settings(**overrides):
         "amazon": {"asins": [], "search_queries": [], "watch_known_listings": False},
         # The in-stock self-test has its own tests; keep it out of the others.
         "monitor": {"interval_seconds": 30, "request_delay_seconds": [0, 0], "selftest_every_hours": 0,
-                    "debug_dump_dir": tempfile.mkdtemp(prefix="scanamzn-debug-")},
+                    "debug_dump_dir": tempfile.mkdtemp(prefix="scanamzn-debug-"),
+                    # pause / data-saver flags and the request budget live next to it
+                    "status_file": str(Path(tempfile.mkdtemp(prefix="scanamzn-state-")) / "status.json")},
     }
     for section, values in overrides.items():
         data.setdefault(section, {}).update(values)

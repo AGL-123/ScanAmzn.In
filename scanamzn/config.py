@@ -154,6 +154,8 @@ class Settings:
     request_delay_seconds: tuple[float, float] = (1.0, 3.0)
     search_every_cycles: int = 1
     other_listings_per_round: int = 2  # of the values checked in turn (MORE_LISTINGS)
+    # Amazon answers bursts with bot checks; shared by all bot processes. 0 = no limit.
+    max_requests_per_minute: int = 8
     max_discovered: int = 15
     realert_cooldown_minutes: float = 10.0
     notify_when_sold_out: bool = False
@@ -256,6 +258,7 @@ def from_dict(data: dict[str, Any]) -> Settings:
     s.request_delay_seconds = (float(delay[0]), float(delay[1]))
     s.search_every_cycles = max(1, mon.int("search_every_cycles", s.search_every_cycles))
     s.other_listings_per_round = max(0, mon.int("other_listings_per_round", s.other_listings_per_round))
+    s.max_requests_per_minute = max(0, mon.int("max_requests_per_minute", s.max_requests_per_minute))
     s.max_discovered = max(0, mon.int("max_discovered", s.max_discovered))
     s.realert_cooldown_minutes = mon.float("realert_cooldown_minutes", s.realert_cooldown_minutes)
     s.notify_when_sold_out = mon.bool("notify_when_sold_out", s.notify_when_sold_out)

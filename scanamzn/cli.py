@@ -46,7 +46,11 @@ def _setup_logging(verbose: bool, log_file: str = "", tz: tzinfo | None = None) 
 
 
 def _fetcher(s: Settings) -> Fetcher:
-    return Fetcher(s.domain, timeout=s.request_timeout, backend=s.http_backend, proxy=s.proxy)
+    from .budget import RequestBudget
+    from .selftest import state_dir
+
+    budget = RequestBudget(state_dir(s) / "request-times", s.max_requests_per_minute)
+    return Fetcher(s.domain, timeout=s.request_timeout, backend=s.http_backend, proxy=s.proxy, budget=budget)
 
 
 def _zone_name(s: Settings) -> str:
@@ -248,6 +252,8 @@ def cmd_selftest(args: argparse.Namespace, s: Settings) -> int:
 
     rng = random.Random()
     fetcher = _fetcher(s)
+    # The running monitor waits meanwhile; the pause expires by itself if this dies.
+    selftest.pause_monitor(s, selftest.PAUSE_SECONDS)
     try:
         result = selftest.run(
             s, fetcher, pause=pause, dump=dump,
@@ -255,6 +261,7 @@ def cmd_selftest(args: argparse.Namespace, s: Settings) -> int:
             wait=time.sleep,
         )
     finally:
+        selftest.resume_monitor(s)
         fetcher.close()
     text = result.summary()
     if saved:
@@ -273,7 +280,7 @@ def cmd_selftest(args: argparse.Namespace, s: Settings) -> int:
     if args.send:
         notifiers = build_notifiers(s)
         if notifiers:
-            dispatcher = Dispatcher(notifiers, retries=1)
+            dispatcher = Dispatcher(notifiers, retries=3)  # mobile networks drop a request now and then
             try:
                 dispatcher.send_and_wait(Message(
                     subject=f"{icon} PS5 monitor self-test {word}",
