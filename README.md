@@ -28,9 +28,11 @@ Every ~45 seconds (randomised), the bot:
    repeat alerts. If it sells out and comes back, you get a new alert (after a
    10-minute cooldown, so a flickering listing doesn't flood you). Several
    items restocking together send one alert each.
-4. **Skips scalper prices.** A listing priced more than 10% above the face value
-   in its title (e.g. a ₹1000 card offered at ₹1,500) is marked *overpriced* and
-   doesn't alert. When the price drops to normal, it alerts.
+4. **Flags scalper prices.** A listing priced more than 10% above the face value
+   in its title (e.g. a ₹1000 card offered at ₹1,500) is marked *overpriced*.
+   A watched card that comes back at such a price sends an *IN STOCK above your
+   price limit* alert (at most hourly); resellers' listings that are always in
+   stock at a markup stay quiet. When the price drops to normal, it alerts.
 5. **Backs off when Amazon shows a captcha.** It starts a fresh session with a
    different browser fingerprint and waits longer each time (up to 15 minutes).
    If no check has succeeded for 30 minutes, you get a warning so you know the
@@ -220,8 +222,9 @@ Amazon hides out-of-stock items from search results, so the bot also watches
 the known Sony PlayStation Store gift card listings unless
 `[amazon] watch_known_listings = false`: `KNOWN_LISTINGS` in
 `scanamzn/config.py` every round, and the other values (`MORE_LISTINGS`, ₹500
-to ₹12,000) one per round in turn - all of them at once in a round where any
-card has just come back in stock, since restocks often come together.
+to ₹12,000) `monitor.other_listings_per_round` (default 2) per round in turn -
+all of them at once in a round where any card has just come back in stock,
+since restocks often come together.
 
 The running monitor repeats the positive control every
 `monitor.selftest_every_hours` (default 6). It warns after two failures in a

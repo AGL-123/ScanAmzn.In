@@ -32,7 +32,7 @@ def env(monkeypatch, tmp_path):
 def test_check_config(env, capsys):
     assert main(["check-config"]) == 0
     out = capsys.readouterr().out
-    assert "4 product(s)" in out and "e-mail to so***@gmail.com" in out and "09:00 (Asia/Jerusalem)" in out
+    assert "5 product(s)" in out and "e-mail to so***@gmail.com" in out and "09:00 (Asia/Jerusalem)" in out
     assert "someone@gmail.com" not in out  # addresses are masked in logs
 
 

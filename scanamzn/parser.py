@@ -32,21 +32,19 @@ _BLOCK_MARKERS = (
     "make sure you&#39;re not a robot",
     "api-services-support@amazon.com",
     "to discuss automated access to amazon data",
-    # AWS WAF JavaScript challenge / CAPTCHA (normally HTTP 202 / 405, but
-    # also seen with 200): its scripts come from *.token.awswaf.com,
-    # captcha.awswaf.com or captcha-sdk.awswaf.com.
+    # AWS WAF JavaScript challenge / CAPTCHA page (normally HTTP 202 / 405,
+    # also seen with 200). Only the interstitial's own objects: the AWS SDK
+    # host names can also appear on normal pages.
     "awswafcookiedomainlist",
     "awswafintegration",
     "gokuprops",
-    ".awswaf.com",
-    # Amazon's "Sorry! Something went wrong" throttle page, and Akamai's
-    # bot-check interstitial (used by some Amazon storefronts).
-    "ref=cs_503",
+    # Akamai's bot-check interstitial (used by some Amazon storefronts).
     "/_sec/verify",
 )
 _NOT_FOUND_MARKER = "the web address you entered is not a functioning page"
 # Present only on real pages; a page carrying one is never a robot/404 page.
-_REAL_PAGE_MARKERS = ('id="productTitle"', 'data-component-type="s-search-result"')
+_PRODUCT_PAGE_MARKERS = ('id="productTitle"', 'id="gc-asin-title"')  # normal / gift-card layout
+_REAL_PAGE_MARKERS = (*_PRODUCT_PAGE_MARKERS, 'data-component-type="s-search-result"')
 
 # Main buy-box buttons. Deliberately ids only: generic add-to-cart inputs also
 # appear in "frequently bought together" widgets for *other* products.
@@ -149,8 +147,12 @@ def _price_of(el: Tag) -> float | None:
 
 def is_blocked(html: str, status_code: int = 200) -> bool:
     """True for captcha / robot-check / throttling responses."""
-    # 202 / 405 are AWS WAF's JavaScript challenge / CAPTCHA; real pages are 200.
-    if status_code in (202, 405, 429, 503):
+    if status_code in (404, 410):  # Amazon's "page not found", never a bot check
+        return False
+    # 202 / 405 are AWS WAF's JavaScript challenge / CAPTCHA, 403 a WAF block;
+    # real pages are 200. (Amazon's "Sorry! Something went wrong" throttle
+    # comes as 503.)
+    if status_code in (202, 403, 405, 429, 503):
         return True
     if any(marker in html for marker in _REAL_PAGE_MARKERS):
         return False
@@ -160,7 +162,7 @@ def is_blocked(html: str, status_code: int = 200) -> bool:
 
 def is_product_page(html: str) -> bool:
     """True for a real product page (it has the product title block)."""
-    return _REAL_PAGE_MARKERS[0] in html
+    return any(marker in html for marker in _PRODUCT_PAGE_MARKERS)
 
 
 def _is_not_found(html: str, status_code: int) -> bool:

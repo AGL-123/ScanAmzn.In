@@ -216,6 +216,8 @@ below).
 
 * **🎮 IN STOCK**: tap the *Buy* link (or *Add to cart*) right away. These
   cards sell out in minutes.
+* **🎮 IN STOCK above your price limit**: a card is back, but priced more
+  than 10% over its face value. Buy it if that price is OK for you.
 * **🎮 CHECK NOW: … may be in stock**: a gift card page that said *currently
   unavailable* has changed to something the bot can't read. That may be a
   restock in a layout the bot hasn't seen yet, so open the link right away.
@@ -247,8 +249,9 @@ first alert:
   balance, an Indian card or UPI) - try a small digital purchase first if
   you're unsure.
 * When cards are back, the most a seller usually charges is face value or a
-  few percent more. Listings priced more than 10% above the value printed in
-  their title are skipped as *overpriced*. If you'd pay more, raise
+  few percent more. A card priced more than 10% above the value printed in
+  its title arrives as *IN STOCK above your price limit* instead of *IN
+  STOCK*. To get plain *IN STOCK* alerts at such prices, raise
   `max_markup_percent` in the `[filter]` section of the settings file
   (`nano ~/ScanAmzn.In/config.toml` in Termux), then `ps5 restart`.
 
@@ -269,9 +272,9 @@ stock**.
 2. that the searches return results and which PlayStation gift card listings
    they found (Amazon hides out-of-stock items from search, so finding none is
    normal; that's why the bot also watches the known Sony PlayStation Store
-   gift card listings directly: Rs.1000 / 4000 / 9000 every check, the other
-   values from Rs.500 to Rs.12,000 one per check in turn, and all of them at
-   once as soon as any card comes back);
+   gift card listings directly: Rs.1000 / 2000 / 4000 / 9000 every check, the
+   other values from Rs.500 to Rs.12,000 two per check in turn, and all of
+   them at once as soon as any card comes back);
 3. that all those gift card pages are understood (*unavailable* / *in stock*;
    *page not found* means Amazon removed that listing);
 4. that an in-stock product is read as **in stock** with its price.
@@ -304,9 +307,9 @@ warned if it fails twice in a row.
 ## Mobile data and battery
 
 Every check downloads the Amazon pages it watches, roughly 0.15-0.3 MB each.
-With the default settings (a check every 60 s: three gift card pages plus one
-other value in turn, searches every 3rd check) that is about **1-2 GB a day**,
-more while searches keep finding listings. The setup wizard shows the estimate
+With the default settings (a check every 60 s: four gift card pages plus two
+other values in turn, searches every 3rd check) that is about **1-2.5 GB a
+day**, more while searches keep finding listings. The setup wizard shows the estimate
 for your settings. Use **Wi-Fi** if you can, or choose a longer interval in
 **PS5 Settings** (120 s roughly halves it). Battery use is modest, but keep the
 phone on the charger if you can.

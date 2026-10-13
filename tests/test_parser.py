@@ -151,10 +151,17 @@ def test_other_amazon_walls_are_blocked():
     captcha_405 = '<html><head><title>Human Verification</title><script src="https://captcha.awswaf.com/x/jsapi.js"></script></head></html>'
     throttle = '<html><body>Sorry! Something went wrong! <a href="/ref=cs_503_link">Go to the Amazon.in home page</a></body></html>'
     akamai = '<html><head><meta http-equiv="refresh" content="5; URL=/_sec/verify?provider=interstitial"></head></html>'
-    assert is_blocked(captcha_405, 405) and is_blocked(captcha_405, 200)
-    assert is_blocked(throttle, 200) and is_blocked(akamai, 200)
+    assert is_blocked(captcha_405, 405) and is_blocked(akamai, 200)
+    assert is_blocked(throttle, 503) and is_blocked("<html>Request blocked.</html>", 403)
+    # A broken listing's error page is that page's problem, not a bot check.
+    assert not is_blocked(throttle, 200) and not is_blocked(throttle, 500)
     # Real pages never count as blocked, whatever scripts they load.
-    real = product_html("x", available=True).replace("</body>", '<script src="https://a.token.awswaf.com/sdk.js"></script></body>')
-    assert not is_blocked(real, 200)
+    sdk = '<script src="https://a.token.awswaf.com/sdk.js"></script><script src="https://captcha-sdk.awswaf.com/x/jsapi.js"></script>'
+    assert not is_blocked(product_html("x", available=True).replace("</body>", sdk + "</body>"), 200)
+    gift_card_layout = f'<html><body><span id="gc-asin-title">PS card</span>{sdk}<div id="availability">Currently unavailable.</div></body></html>'
+    assert not is_blocked(gift_card_layout, 200) and is_product_page(gift_card_layout)
+    assert parse_product(gift_card_layout, "B0X", 200).status is Status.UNAVAILABLE
+    dog_page = fixture("not_found.html").replace("</body>", sdk + "</body>")
+    assert not is_blocked(dog_page, 404) and parse_product(dog_page, "B0X", 404).status is Status.NOT_FOUND
     for name in ("product_available.html", "product_unavailable.html", "product_other_sellers.html", "search_results.html"):
         assert not is_blocked(fixture(name), 200), name

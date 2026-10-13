@@ -45,6 +45,9 @@ jitter = 0.25
 request_delay_seconds = [1.0, 3.0]
 # Run the search queries every N cycles (1 = every cycle).
 search_every_cycles = 1
+# The built-in gift card values that are not checked every round: how many of
+# them to check per round, in turn (all of them right after any restock).
+other_listings_per_round = 2
 # Maximum number of listings auto-watched from search results.
 max_discovered = 15
 # After an alert, ignore the same item going out of and back into stock for this long.

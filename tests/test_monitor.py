@@ -75,16 +75,39 @@ def test_sold_out_notification_is_optional(fetcher, dispatcher, clock):
     assert [msg.subject.split(":")[0] for msg in dispatcher.messages] == ["🎮 IN STOCK", "Gone"]
 
 
-def test_scalper_price_is_not_alerted_until_it_drops(fetcher, dispatcher, clock):
+def test_scalper_price_is_flagged_not_called_in_stock_until_it_drops(fetcher, dispatcher, clock):
     m = make_monitor(fetcher, dispatcher, clock, **watching())
     fetcher.set_product(ASIN, product_html(TITLE, available=True, price="₹1,500.00"))
     m.run_cycle()
     assert m.items[ASIN].status is Status.OVERPRICED
-    assert dispatcher.messages == []
+    assert [x.subject.startswith("🎮 IN STOCK above your price limit") for x in dispatcher.messages] == [True]
+    m.run_cycle()  # still overpriced: no repeat
+    assert len(dispatcher.messages) == 1
 
     fetcher.set_product(ASIN, product_html(TITLE, available=True, price="₹1,000.00"))
     m.run_cycle()
-    assert len(dispatcher.messages) == 1
+    assert len(dispatcher.messages) == 2 and dispatcher.messages[1].subject.startswith("🎮 IN STOCK:")
+
+
+def test_overpriced_restock_after_unavailable_alerts(fetcher, dispatcher, clock):
+    m = make_monitor(fetcher, dispatcher, clock, **watching())
+    fetcher.set_product(ASIN, product_html(TITLE, available=False))
+    m.run_cycle()
+    fetcher.set_product(ASIN, product_html(TITLE, available=True, price="₹1,150.00"))
+    m.run_cycle()
+    msg = dispatcher.messages[-1]
+    assert "above your price limit" in msg.subject and msg.kind == "alert" and "₹1,150" in msg.body
+    assert f"/dp/{ASIN}" in msg.body and "max_markup_percent" in msg.body
+
+
+def test_reseller_listing_always_overpriced_stays_quiet(fetcher, dispatcher, clock):
+    # A listing found by search (not watched) that is in stock at a markup from the start.
+    m = make_monitor(fetcher, dispatcher, clock, amazon={"search_queries": ["psn"]})
+    from scanamzn.models import Product
+
+    reseller = Product("B0RESELL01", Status.AVAILABLE, title="INR 2000 PlayStation Store Gift Card", price=2699.0)
+    m._record(m._apply_price_limits(reseller), CycleReport())
+    assert m.items["B0RESELL01"].status is Status.OVERPRICED and dispatcher.messages == []
 
 
 def test_markup_check_can_be_disabled_and_max_price_applies(fetcher, dispatcher, clock):
@@ -168,9 +191,8 @@ def test_search_result_trusted_when_product_page_cannot_be_read(fetcher, dispatc
     m = make_monitor(fetcher, dispatcher, clock, amazon={"search_queries": ["playstation gift card"]})
     fetcher.set_search("playstation gift card", fixture("search_results.html"))
     fetcher.set_product("B0PSN01000", fixture("captcha.html"))
-    report = m.run_cycle()
-    assert report.blocked
-    assert len(dispatcher.messages) == 1
+    m.run_cycle()
+    assert "B0PSN01000" in dispatcher.messages[0].subject or "1000" in dispatcher.messages[0].subject
     assert "search page" in dispatcher.messages[0].body
 
 
@@ -436,9 +458,10 @@ def test_no_changed_page_alert_without_a_prior_unavailable_reading(fetcher, disp
 # --- other card values, checked in turn ---------------------------------------------------
 
 
-def rotating_monitor(fetcher, dispatcher, clock, rotating=("B0ROT00001", "B0ROT00002", "B0ROT00003")):
+def rotating_monitor(fetcher, dispatcher, clock, rotating=("B0ROT00001", "B0ROT00002", "B0ROT00003"), per_round=1):
     m = make_monitor(fetcher, dispatcher, clock, **watching())
     m.s.rotating_asins = list(rotating)
+    m.s.other_listings_per_round = per_round
     fetcher.set_product(ASIN, product_html(TITLE, available=False))
     for asin in rotating:
         fetcher.set_product(asin, product_html(f"Rs.{asin[-1]}000 PlayStation card", available=False))
@@ -505,14 +528,16 @@ def test_a_sweep_cut_short_by_a_bot_check_continues_next_round(fetcher, dispatch
     m = rotating_monitor(fetcher, dispatcher, clock)
     m.run_cycle()
     fetcher.set_product(ASIN, product_html(TITLE, available=True))
-    fetcher.set_product("B0ROT00002", fixture("aws_waf_challenge.html"), status=202)
-    report = m.run_cycle()  # restock, then a bot check in the middle of the sweep
+    for asin in ("B0ROT00001", "B0ROT00002"):  # two bot checks in a row: the session is blocked
+        fetcher.set_product(asin, fixture("aws_waf_challenge.html"), status=202)
+    report = m.run_cycle()  # restock, then bot checks in the middle of the sweep
     assert report.blocked and m.sweep == {"B0ROT00002", "B0ROT00003"}
     fetcher.requests.clear()
-    fetcher.set_product("B0ROT00002", product_html("Rs.2000 PlayStation card", available=False))
-    m.run_cycle()
-    assert [u.rsplit("/", 1)[1] for u in fetcher.requests] == [ASIN, "B0ROT00002", "B0ROT00003"]
-    assert m.sweep == set()
+    for asin in ("B0ROT00001", "B0ROT00002"):
+        fetcher.set_product(asin, product_html("PlayStation card", available=False))
+    m.run_cycle()  # the page that stopped the round comes last now
+    assert [u.rsplit("/", 1)[1] for u in fetcher.requests] == [ASIN, "B0ROT00003", "B0ROT00002"]
+    assert m.sweep == set() and "B0ROT00002" not in m.suspect  # it loaded, so it's back to normal
 
 
 def test_changed_page_alert_survives_a_404_in_between(fetcher, dispatcher, clock):
@@ -531,3 +556,73 @@ def test_missing_listing_is_reported_once(fetcher, dispatcher, clock, caplog):
     for _ in range(3):
         m.run_cycle()
     assert sum("product page not found" in r.message for r in caplog.records) == 1
+
+
+def test_two_other_values_per_round_by_default(fetcher, dispatcher, clock):
+    from scanamzn.config import from_dict
+
+    assert from_dict({}).other_listings_per_round == 2
+    m = rotating_monitor(fetcher, dispatcher, clock, per_round=2)
+    for _ in range(3):
+        m.run_cycle()
+    pages = [u.rsplit("/", 1)[1] for u in fetcher.requests]
+    assert pages == [ASIN, "B0ROT00001", "B0ROT00002", ASIN, "B0ROT00003", "B0ROT00001",
+                     ASIN, "B0ROT00002", "B0ROT00003"]
+
+
+
+# --- one listing whose page always looks like a bot check must not stop the others -----
+
+
+def test_a_listing_that_alone_shows_a_bot_check_is_skipped_and_checked_last(fetcher, dispatcher, clock):
+    m = make_monitor(fetcher, dispatcher, clock, **watching(asins=("B0BROKEN01", ASIN, "B0PSN02000")))
+    fetcher.set_product(ASIN, product_html(TITLE, available=False))
+    fetcher.set_product("B0PSN02000", product_html("Rs.2000 PlayStation card", available=False))
+    fetcher.set_product("B0BROKEN01", fixture("aws_waf_challenge.html"), status=202)
+
+    report = m.run_cycle()  # the first page of the round is blocked: maybe a real bot check, back off
+    assert report.blocked and fetcher.requests == [fetcher.product_url("B0BROKEN01")]
+
+    fetcher.requests.clear()
+    fetcher.set_product(ASIN, product_html(TITLE, available=True))
+    for _ in range(3):  # from now on it comes last and is skipped; the others keep being checked
+        report = m.run_cycle()
+        assert not report.blocked and report.errors == 1
+    pages = [u.rsplit("/", 1)[1] for u in fetcher.requests]
+    assert pages == [ASIN, "B0PSN02000", "B0BROKEN01"] * 3
+    assert [x.subject.startswith("🎮 IN STOCK") for x in dispatcher.messages] == [True]
+
+
+def test_a_bot_check_on_one_page_amid_normal_pages_is_skipped_once(fetcher, dispatcher, clock):
+    m = make_monitor(fetcher, dispatcher, clock, **watching(asins=(ASIN, "B0BROKEN01", "B0PSN02000")))
+    fetcher.set_product(ASIN, product_html(TITLE, available=False))
+    fetcher.set_product("B0BROKEN01", fixture("aws_waf_challenge.html"), status=202)
+    fetcher.set_product("B0PSN02000", product_html("Rs.2000 PlayStation card", available=True, price="₹2,000.00"))
+    report = m.run_cycle()
+    assert not report.blocked and "B0BROKEN01" in m.suspect
+    assert any("IN STOCK" in x.subject for x in dispatcher.messages)  # the listing after it was still checked
+    fetcher.requests.clear()
+    m.run_cycle()
+    assert fetcher.requests[-1] == fetcher.product_url("B0BROKEN01")  # checked last from now on
+
+
+def test_two_bot_checks_in_one_round_stop_the_round(fetcher, dispatcher, clock):
+    m = make_monitor(fetcher, dispatcher, clock, **watching(asins=(ASIN, "B0BLOCK001", "B0BLOCK002", "B0PSN02000")))
+    fetcher.set_product(ASIN, product_html(TITLE, available=False))
+    for asin in ("B0BLOCK001", "B0BLOCK002"):
+        fetcher.set_product(asin, fixture("aws_waf_challenge.html"), status=202)
+    report = m.run_cycle()
+    assert report.blocked and fetcher.product_url("B0PSN02000") not in fetcher.requests
+
+
+def test_a_rotating_listing_that_alone_shows_a_bot_check_does_not_stall_the_sweep(fetcher, dispatcher, clock):
+    m = rotating_monitor(fetcher, dispatcher, clock)
+    fetcher.set_product("B0ROT00001", fixture("aws_waf_challenge.html"), status=202)
+    m.run_cycle()
+    fetcher.set_product(ASIN, product_html(TITLE, available=True))  # restock: sweep all others
+    m.run_cycle()
+    assert m.sweep == set()
+    fetcher.requests.clear()
+    m.run_cycle()
+    m.run_cycle()
+    assert fetcher.product_url("B0ROT00002") in fetcher.requests  # rotation goes on

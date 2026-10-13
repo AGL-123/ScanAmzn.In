@@ -62,6 +62,7 @@ class ItemState:
     last_changed_alert_at: float = -math.inf
     # Last stock reading was "unavailable" (a 404 in between doesn't change that).
     seen_unavailable: bool = False
+    last_overpriced_alert_at: float = -math.inf
 
 
 @dataclass
@@ -112,6 +113,11 @@ class Monitor:
         # Other values still to check after a restock; survives a round cut
         # short by a bot check.
         self.sweep: set[str] = set()
+        # Pages that alone showed a bot check while the others loaded fine
+        # (e.g. a broken listing): checked last, so they can't stop the round.
+        self.suspect: set[str] = set()
+        self._loaded_in_round = 0
+        self._skipped_block = False
         self.cycle = 0
         self.block_streak = 0
         self.last_success = clock()
@@ -193,16 +199,17 @@ class Monitor:
     def run_cycle(self) -> CycleReport:
         self.cycle += 1
         self._requests_in_cycle = 0
+        self._loaded_in_round, self._skipped_block = 0, False
         report = CycleReport()
         checked: dict[str, Product] = {}
 
-        for asin in self.watch_list():
+        watched = self.watch_list()
+        for asin in sorted(watched, key=lambda a: a in self.suspect):
             if self._stop.is_set():
                 return report
             product = self._check_product(asin, report)
             checked[asin] = product
-            if product.status is Status.BLOCKED:
-                report.blocked = True
+            if product.status is Status.BLOCKED and self._stop_for_block(report, asin):
                 return report
 
         # Search every round when no product pages are watched (searches are
@@ -217,8 +224,9 @@ class Monitor:
                 if page is None:
                     continue
                 if page.blocked:
-                    report.blocked = True
-                    return report
+                    if self._stop_for_block(report, f"search {query!r}"):
+                        return report
+                    continue
                 self._handle_search_results(page, checked, report)
                 if report.blocked:
                     return report
@@ -231,25 +239,44 @@ class Monitor:
         self.sweep &= set(rotating)  # the rest were checked this round or are watched every round
         batch = [a for a in rotating if a in self.sweep or (a in self.items and self.items[a].in_stock)]
         waiting = [a for a in rotating if a not in batch]
-        if not self.sweep and waiting:  # the next one after the last turn, in list order
+        if not self.sweep:  # the next ones after the last turn, in list order
             order = self.s.rotating_asins
-            start = self.rotation % len(order)
-            pick = next(a for a in order[start:] + order[:start] if a in waiting)
-            self.rotation = order.index(pick) + 1
-            batch.append(pick)
+            for _ in range(min(self.s.other_listings_per_round, len(waiting))):
+                start = self.rotation % len(order)
+                pick = next(a for a in order[start:] + order[:start] if a in waiting and a not in batch)
+                self.rotation = order.index(pick) + 1
+                batch.append(pick)
+        batch.sort(key=lambda a: a in self.suspect)
         i = 0
         while i < len(batch):
             asin = batch[i]
             i += 1
             if self._stop.is_set():
                 return report
-            if self._check_product(asin, report).status is Status.BLOCKED:
-                report.blocked = True
+            if self._check_product(asin, report).status is Status.BLOCKED and self._stop_for_block(report, asin):
                 return report
             done.add(asin)
             self.sweep -= done
             batch += [a for a in rotating if a in self.sweep and a not in batch]  # a restock just now
         return report
+
+    def _stop_for_block(self, report: CycleReport, what: str) -> bool:
+        """A bot check normally covers the whole session: stop the round and
+        back off. But a single bot-check page after pages that loaded fine is
+        more likely that page alone (a broken listing, say): skip it. Either
+        way the page is checked last from then on (until it loads), so a page
+        like that can't keep the other listings from being checked - not even
+        when it comes first. A second one in the same round stops the round."""
+        known = what in self.suspect
+        self.suspect.add(what)
+        if self._loaded_in_round and not self._skipped_block:
+            self._skipped_block = True
+            report.errors += 1
+            if not known:
+                log.warning("%s: Amazon showed a bot check for this page only; skipping it this round", what)
+            return False
+        report.blocked = True
+        return True
 
     # -- checks ----------------------------------------------------------------
     def _pause(self) -> None:
@@ -267,6 +294,9 @@ class Monitor:
             product = Product(asin, Status.ERROR, reason=str(exc))
         else:
             product = parse_product(page.text, asin, page.status_code)
+            if product.status is not Status.BLOCKED:
+                self._loaded_in_round += 1
+                self.suspect.discard(asin)
             if product.status is Status.UNKNOWN:
                 self._dump(f"product_{asin}", page.text)
                 if is_product_page(page.text):
@@ -288,6 +318,8 @@ class Monitor:
         if result.blocked:
             self.last_problem = "captcha/robot check"
             return result
+        self._loaded_in_round += 1
+        self.suspect.discard(f"search {query!r}")
         if not result.layout_ok:
             report.errors += 1
             self.last_problem = f"search page not understood (HTTP {page.status_code})"
@@ -321,8 +353,7 @@ class Monitor:
                         item.asin, confirmed.status,
                     )
                     self._record(item, report)
-                if confirmed.status is Status.BLOCKED:
-                    report.blocked = True
+                if confirmed.status is Status.BLOCKED and self._stop_for_block(report, item.asin):
                     return
             elif prior is None and item.asin not in self.watch_list():
                 self._record(item, report)
@@ -374,6 +405,7 @@ class Monitor:
 
         product = self._apply_price_limits(product)
         state = self.items.setdefault(product.asin, ItemState(product.asin))
+        prev, was_unavailable = state.status, state.seen_unavailable
         state.changed_alerted = False
         state.title = product.title or state.title
         state.price = product.price
@@ -405,6 +437,18 @@ class Monitor:
             state.in_stock = False
             if self.s.notify_when_sold_out:
                 self.dispatcher.send(self._sold_out_message(state, product))
+        elif product.status is Status.OVERPRICED and prev is not Status.OVERPRICED:
+            # Back, but above the price limit. Still worth knowing when it was
+            # unavailable before (or is one of the scarce watched cards): the
+            # user may pay a bit more. Resellers' listings that are always in
+            # stock at a markup never read "unavailable", so they stay quiet.
+            watched = product.asin in self.s.asins or product.asin in self.s.rotating_asins
+            if was_unavailable or (prev is None and watched):
+                self.sweep = set(self.s.rotating_asins)
+                if now - state.last_overpriced_alert_at >= CHANGED_PAGE_COOLDOWN_SECONDS:
+                    state.last_overpriced_alert_at = now
+                    self.stats.alerts += 1
+                    self.dispatcher.send(self._overpriced_message(state, product))
 
     def _maybe_changed_page_alert(self, product: Product) -> None:
         """A watched page that read "unavailable" is now a product page the bot
@@ -470,6 +514,29 @@ class Monitor:
             subject=f"🎮 IN STOCK: {shorten(title, 60)} – {format_inr(product.price)}",
             body="\n".join(lines),
             summary=f"{shorten(title, 60)} is in stock on Amazon.in ({format_inr(product.price)}): {url}",
+        )
+
+    def _overpriced_message(self, state: ItemState, product: Product) -> Message:
+        title = state.title or f"ASIN {state.asin}"
+        url = self.fetcher.product_url(state.asin)
+        return Message(
+            subject=f"🎮 IN STOCK above your price limit: {shorten(title, 50)} – {format_inr(product.price)}",
+            body="\n".join([
+                "A PlayStation gift card you are watching is back on Amazon.in, but priced above your limit",
+                f"({product.reason}). If you'd pay that, buy now - these sell out within minutes.",
+                "",
+                title,
+                f"Price: {format_inr(product.price)}",
+                *([f"Seller: {product.seller}"] if product.seller else []),
+                "",
+                f"Buy: {url}",
+                f"Add to cart: {self.fetcher.cart_url(state.asin)}",
+                "",
+                "To be alerted as IN STOCK at such prices, raise max_markup_percent in the [filter] section"
+                " of the settings file.",
+            ]),
+            summary=f"{shorten(title, 60)} is back on Amazon.in at {format_inr(product.price)}"
+                    f" (above your price limit): {url}",
         )
 
     def _sold_out_message(self, state: ItemState, product: Product) -> Message:

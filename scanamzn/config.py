@@ -37,13 +37,13 @@ _ASIN = re.compile(r"^[A-Z0-9]{10}$")
 # [amazon] watch_known_listings = false. These are checked every round:
 KNOWN_LISTINGS = {
     "B07K6RYVHR": "Rs.1000 Sony PlayStation Store Gift Card",
+    "B093QF35KZ": "Rs.2000 Sony PlayStation Store Gift Card",  # seen back in stock, October 2026
     "B07K6RYVJ5": "Rs.4000 Sony PlayStation Store Gift Card",
     "B0CYNZJLBC": "Rs.9000 Sony PlayStation Store Gift Card",
 }
-# ...and these, the other values, one per round in turn (all at once when any
-# card comes back in stock), so covering them costs little extra data.
+# ...and these, the other values, a few per round in turn (all at once when
+# any card comes back in stock), so covering them costs little extra data.
 MORE_LISTINGS = {
-    "B093QF35KZ": "Rs.2000 Sony PlayStation Store Gift Card",
     "B0B3DDW7TB": "Rs.5000 Sony PlayStation Store Gift Card",
     "B07K6RK5KR": "Rs.4500 Sony PlayStation Network Wallet Top-Up",
     "B0CYPG8RYH": "Rs.7000 Sony PlayStation Store Gift Card",
@@ -153,6 +153,7 @@ class Settings:
     jitter: float = 0.25
     request_delay_seconds: tuple[float, float] = (1.0, 3.0)
     search_every_cycles: int = 1
+    other_listings_per_round: int = 2  # of the values checked in turn (MORE_LISTINGS)
     max_discovered: int = 15
     realert_cooldown_minutes: float = 10.0
     notify_when_sold_out: bool = False
@@ -254,6 +255,7 @@ def from_dict(data: dict[str, Any]) -> Settings:
         raise ConfigError("monitor.request_delay_seconds must be [min, max]")
     s.request_delay_seconds = (float(delay[0]), float(delay[1]))
     s.search_every_cycles = max(1, mon.int("search_every_cycles", s.search_every_cycles))
+    s.other_listings_per_round = max(0, mon.int("other_listings_per_round", s.other_listings_per_round))
     s.max_discovered = max(0, mon.int("max_discovered", s.max_discovered))
     s.realert_cooldown_minutes = mon.float("realert_cooldown_minutes", s.realert_cooldown_minutes)
     s.notify_when_sold_out = mon.bool("notify_when_sold_out", s.notify_when_sold_out)

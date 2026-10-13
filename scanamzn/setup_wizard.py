@@ -98,12 +98,13 @@ def phone_example(country_code: str | None) -> str:
 def data_estimate(interval: int, asins: int, queries: int = 2, search_every: int = 3,
                   max_discovered: int = 8) -> str:
     """Rough daily mobile-data use for the settings the wizard writes."""
-    from .config import KNOWN_LISTINGS, MORE_LISTINGS
+    from .config import KNOWN_LISTINGS, MORE_LISTINGS, Settings
 
     # Each round fetches the given ASINs, the known gift card listings (plus
-    # one other value in turn), listings the searches found (usually none:
+    # a few other values in turn), listings the searches found (usually none:
     # out-of-stock cards are hidden from search) and, every few rounds, the searches.
-    pages = asins + len(KNOWN_LISTINGS) + (1 if MORE_LISTINGS else 0) + queries / search_every
+    in_turn = min(Settings.other_listings_per_round, len(MORE_LISTINGS))
+    pages = asins + len(KNOWN_LISTINGS) + in_turn + queries / search_every
     rounds_per_day = 86400 / (interval + 15)  # ~15 s of fetching per round
     low = pages * rounds_per_day * 0.15 / 1024
     high = (pages + max_discovered) * rounds_per_day * 0.3 / 1024
@@ -214,9 +215,9 @@ class Wizard:
             raise SystemExit("No alert channel configured - nothing saved. Run setup again.")
 
         out("\n5) WHAT TO WATCH")
-        out("   The Sony PlayStation Store gift card listings are watched automatically: Rs.1000, 4000")
-        out("   and 9000 every check, the other values (Rs.500-12,000) one per check in turn, and all")
-        out("   of them at once when a card comes back. Searches find others. Optionally add more")
+        out("   The Sony PlayStation Store gift card listings are watched automatically: Rs.1000, 2000,")
+        out("   4000 and 9000 every check, the other values (Rs.500-12,000) two per check in turn, and")
+        out("   all of them at once when a card comes back. Searches find others. Optionally add more")
         out("   product IDs (ASINs, the 10 characters after /dp/ in an Amazon link), separated by commas.")
         asins = self._prompt_until(
             "   ASINs", self._check_asins, default=", ".join(self._old("amazon", "asins", default=[])),

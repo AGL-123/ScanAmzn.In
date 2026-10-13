@@ -8,7 +8,7 @@ from scanamzn.config import ConfigError, build_notifiers, from_dict, load
 def test_defaults():
     s = from_dict({})
     assert s.domain == "www.amazon.in"
-    assert s.search_queries and s.asins == ["B07K6RYVHR", "B07K6RYVJ5", "B0CYNZJLBC"]  # known listings
+    assert s.search_queries and s.asins == ["B07K6RYVHR", "B093QF35KZ", "B07K6RYVJ5", "B0CYNZJLBC"]  # known listings
     assert s.interval_seconds == 45 and s.max_markup_percent == 10
     assert build_notifiers(s) == []
 
