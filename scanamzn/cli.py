@@ -342,7 +342,7 @@ def cmd_probe(args: argparse.Namespace, s: Settings) -> int:
     urls = [(a, everything.product_url(a)) for a in asins]
     # The monitor's own pace: its interval spread over the cards it watches.
     interval = s.focus_interval_seconds if s.focus_asins else s.interval_seconds
-    spacing = args.spacing or max(interval / len(asins), probe.MIN_SPACING_SECONDS)
+    spacing = args.spacing or min(max(interval / len(asins), probe.MIN_SPACING_SECONDS), probe.MAX_SPACING_SECONDS)
     print(f"Testing {len(styles)} request styles, {args.tries} pages each, {spacing:.0f} s apart "
           f"(about {len(styles) * (args.tries * spacing + probe.BETWEEN_STYLES_SECONDS) / 60:.0f} min)."
           " The monitor waits meanwhile.", flush=True)

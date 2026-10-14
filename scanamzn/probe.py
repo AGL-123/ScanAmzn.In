@@ -24,6 +24,8 @@ log = logging.getLogger(__name__)
 
 TRIES = 4  # per style, alternating between the watched cards
 MIN_SPACING_SECONDS = 5.0
+# At most: the whole test must fit in the monitor's pause (selftest.PAUSE_SECONDS).
+MAX_SPACING_SECONDS = 15.0
 BETWEEN_STYLES_SECONDS = 10.0
 _ABOUT = {p.name: p.about for p in PROFILES}
 
