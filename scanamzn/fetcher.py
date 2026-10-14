@@ -361,7 +361,7 @@ class Fetcher:
         self._blocked_in_a_row = self._errors_in_a_row = 0
         if old != "browser":
             self._close_session(old)
-        log.info("Amazon keeps stopping request style %r; using %r next", old, self.profile)
+        log.info("request style %r keeps getting bot checks or failing; using %r next", old, self.profile)
 
     def _close_session(self, name: str) -> None:
         session = self._sessions.pop(name, None)
@@ -405,7 +405,8 @@ class Fetcher:
             self._errors_in_a_row += 1
             if self._errors_in_a_row >= ERRORS_BEFORE_SWITCH:
                 self._switch_to = ""
-            self._close_session(p.name)  # e.g. a browser that crashed starts again
+            if p.transport != "browser":  # the browser restarts itself when it crashed or hung
+                self._close_session(p.name)
             raise
         self._errors_in_a_row = 0
         if not page.blocked:
@@ -431,7 +432,6 @@ class Fetcher:
         except Stopped:
             raise
         except FetchError as exc:
-            self._close_session("browser")
             pause = min(RESCUE_PAUSE_SECONDS * 2 ** self._rescue_failures, 1800.0)
             self._rescue_failures += 1
             self._rescue_paused_until = self.clock() + pause

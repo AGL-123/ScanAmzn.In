@@ -98,6 +98,24 @@ def test_a_browser_left_over_from_a_killed_bot_is_replaced(tmp_path, site):
         first.close()
 
 
+@needs_browser
+def test_fetcher_reads_a_challenged_page_with_the_real_browser(site, tmp_path, monkeypatch):
+    f = fetcher_mod.Fetcher(site.base.removeprefix("http://"), browser_path=BROWSER, browser_dir=tmp_path / "b")
+    monkeypatch.setattr(f, "product_url", lambda asin: f"{site.base}/dp/{asin}")
+    f.wait = lambda t: None
+    f.profile_index = f.profiles.index("legacy")
+    try:
+        page = f.get(f.product_url("B07K6RYVJ5"))  # Python's requests get the challenge...
+        assert page.status_code == 200 and page.profile == "browser" and not page.blocked  # ...the browser the page
+        assert f.stats["legacy"]["blocked"] == 1 and f.stats["browser"]["ok"] == 1
+        f.get(f.product_url("B093QF35KZ"))
+        f.get(f.product_url("B093QF35KZ"))
+        assert f.profile == "browser"
+        assert f.get(f.product_url("B07K6RYVJ5")).profile == "browser"
+    finally:
+        f.close()
+
+
 def test_missing_browser_program_is_reported(tmp_path):
     session = BrowserSession(str(tmp_path / "no-such-chromium"), "www.amazon.in", tmp_path / "profile")
     with pytest.raises(Exception, match="browser"):

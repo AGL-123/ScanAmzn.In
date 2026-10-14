@@ -165,6 +165,7 @@ class _Pipe:
             while msg_id not in self._results:
                 left = deadline - time.monotonic()
                 if left <= 0:
+                    self.closed = True  # hung: start a new one rather than wait on it again
                     raise BrowserError(f"the browser did not answer {method} within {timeout:.0f} s")
                 self._read(left)
             reply = self._results.pop(msg_id)
@@ -219,7 +220,7 @@ class BrowserSession:
                  log_path: str | Path | None = None, wait: Callable[[float], Any] = time.sleep,
                  clock: Callable[[], float] = time.monotonic):
         self.binary, self.domain = binary, domain
-        self.site = domain.removeprefix("www.")
+        self.site = (urlsplit("//" + domain).hostname or domain).removeprefix("www.")
         self.user_data_dir = Path(user_data_dir)
         self.proxy = proxy
         self.log_path = Path(log_path) if log_path else None
