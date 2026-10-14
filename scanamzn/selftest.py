@@ -226,7 +226,7 @@ def run(settings, fetcher: Fetcher, pause: Pause, dump: Dump, progress: Callable
         test.checks.append(Check(
             "Amazon.in reachable", None,
             f"Amazon keeps asking for a bot check (HTTP {first.status_code}); the monitor waits and retries "
-            "by itself. If this happens often, try `ps5 boost`.",
+            "by itself. If this happens often, add the browser engine: `ps5 browser`.",
         ))
         return test
     where = delivery_location(first.text) or "not shown"

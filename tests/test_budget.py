@@ -58,7 +58,7 @@ def test_fetcher_waits_for_the_budget_before_any_request(tmp_path):
         def close(self):
             pass
 
-    fetcher._new_session = lambda: Session()
+    fetcher._new_session = lambda profile: Session()
     fetcher.wait = lambda t: clock.advance(t)
     fetcher.get("https://www.amazon.in/dp/B0X")
     fetcher.get("https://www.amazon.in/dp/B0Y")
@@ -151,4 +151,4 @@ def test_one_bot_check_then_success_keeps_the_style(monkeypatch, tmp_path):
     f.reset()
     f.get("https://www.amazon.in/dp/B0X")
     f.get("https://www.amazon.in/dp/B0X")
-    assert f.profile == "legacy" and f.stats["legacy"] == {"ok": 2, "blocked": 1}
+    assert f.profile == "legacy" and f.stats["legacy"] == {"ok": 2, "blocked": 1, "errors": 0}

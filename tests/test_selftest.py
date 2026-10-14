@@ -124,7 +124,7 @@ def test_selftest_command(cli_env, monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("SCANAMZN_STATUS_FILE", str(tmp_path / "state" / "status.json"))
     monkeypatch.setenv("SCANAMZN_ASINS", "B0PSN02000")
     fake = full_site(FakeFetcher())
-    monkeypatch.setattr(cli, "_fetcher", lambda s: fake)
+    monkeypatch.setattr(cli, "_fetcher", lambda s, **kw: fake)
     sent = []
 
     class Capture:
@@ -287,7 +287,7 @@ def test_selftest_command_clears_old_pages_and_reports_inconclusive(cli_env, mon
     fake = full_site(FakeFetcher())
     for q in selftest.CONTROL_QUERIES:
         fake.set_search(q, fixture("captcha.html"))
-    monkeypatch.setattr(cli, "_fetcher", lambda s: fake)
+    monkeypatch.setattr(cli, "_fetcher", lambda s, **kw: fake)
     monkeypatch.setattr(cli.time, "sleep", lambda t: None)
     sent = []
 
@@ -370,7 +370,7 @@ def test_selftest_command_pauses_the_monitor_while_it_runs(cli_env, monkeypatch,
 
     monkeypatch.setenv("SCANAMZN_STATUS_FILE", str(tmp_path / "state" / "status.json"))
     monkeypatch.setenv("SCANAMZN_SEARCH_QUERIES", "playstation gift card")
-    monkeypatch.setattr(cli, "_fetcher", lambda s: full_site(FakeFetcher()))
+    monkeypatch.setattr(cli, "_fetcher", lambda s, **kw: full_site(FakeFetcher()))
     monkeypatch.setattr(cli.time, "sleep", lambda t: None)
     seen = []
     real_run = selftest.run

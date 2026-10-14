@@ -255,6 +255,7 @@ class Monitor:
             if paused_at is None:
                 paused_at = self.clock()
                 log.info("paused while the self-test runs")
+                self.fetcher.close()  # e.g. its browser: the test starts its own
                 self.write_status_file(next_check_in=min(left, PAUSE_SECONDS))
             elif self.clock() - paused_at >= PAUSE_SECONDS:
                 break
@@ -879,6 +880,7 @@ class Monitor:
             "blocked_streak": self.block_streak,
             "request_profile": getattr(self.fetcher, "profile", None),
             "request_stats": getattr(self.fetcher, "stats", None),
+            "browser_ready": "browser" in getattr(self.fetcher, "profiles", ()) if self.s.http_backend == "auto" else None,
             "checks_failing": self.health_alerted,
             "last_problem": self.last_problem,
             "data_saver": self.saver,

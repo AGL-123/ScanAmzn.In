@@ -29,6 +29,7 @@ _SIMPLE: dict[str, tuple[str, str, str]] = {
     "DOMAIN": ("amazon", "domain", "str"),
     "PROXY": ("amazon", "proxy", "str"),
     "HTTP_BACKEND": ("amazon", "http_backend", "str"),
+    "BROWSER_PATH": ("amazon", "browser_path", "str"),
     "INTERVAL_SECONDS": ("monitor", "interval_seconds", "float"),
     "SEARCH_EVERY_CYCLES": ("monitor", "search_every_cycles", "int"),
     "MAX_REQUESTS_PER_MINUTE": ("monitor", "max_requests_per_minute", "int"),

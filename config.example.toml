@@ -32,9 +32,14 @@ search_queries = [
 # Searches for everyday products the self-test uses as an "in stock" reference.
 control_queries = ["usb c cable", "a4 notebook", "ballpoint pen"]
 
-# "auto" uses curl_cffi (Chrome TLS fingerprint, far fewer captchas) when it is
-# installed, else plain requests.
+# How the bot asks for pages. "auto" (recommended) tries every request style
+# the phone has and keeps the one Amazon lets through: Python's requests, the
+# curl program, curl_cffi (`ps5 boost`) and a real Chromium browser (`ps5
+# browser`), which also reads any page that gets a bot check. `ps5 probe`
+# measures them. "requests", "curl", "curl_cffi" or "browser" use only that.
 http_backend = "auto"
+# The Chromium program; empty = found by itself (Termux: chromium-browser).
+browser_path = ""
 # Optional HTTP(S) proxy, e.g. "http://user:pass@host:port".
 proxy = ""
 request_timeout = 20

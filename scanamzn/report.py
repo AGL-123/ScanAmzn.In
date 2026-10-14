@@ -97,10 +97,20 @@ def describe_status_file(path: str | Path, now: datetime | None = None) -> str:
     if data.get("blocked_streak"):
         lines.append(f"  Bot checks:  {data['blocked_streak']} in a row - retrying every 1-3 minutes,"
                      " switching request style")
-    stats = (data.get("request_stats") or {}).get(data.get("request_profile") or "")
-    if stats:
-        lines.append(f"  Requests:    style {data['request_profile']}: {stats['ok']} pages read,"
-                     f" {stats['blocked']} bot check(s) since start")
+    current = data.get("request_profile") or ""
+    styles = data.get("request_stats") or {}
+    used = [(name, st) for name, st in styles.items()
+            if name == current or st.get("ok") or st.get("blocked") or st.get("errors")]
+    used.sort(key=lambda item: item[0] != current)
+    for n, (name, st) in enumerate(used):
+        line = (f"{name}{' (in use)' if name == current and len(used) > 1 else ''}: {st.get('ok', 0)} pages read,"
+                f" {st.get('blocked', 0)} bot check(s)")
+        if st.get("errors"):
+            line += f", {st['errors']} failed"
+        lines.append(f"  {'Requests:' if n == 0 else '':<13}{'style ' if n == 0 else ''}{line}"
+                     + (" since start" if n == 0 else ""))
+    if data.get("browser_ready") is False and any(st.get("blocked") for st in styles.values()):
+        lines.append("  Tip:         `ps5 browser` adds a real browser that reads pages Amazon blocks")
     if data.get("last_problem"):
         lines.append(f"  Last problem: {data['last_problem']}")
     control = data.get("selftest") or {}

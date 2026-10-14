@@ -1,7 +1,8 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # Control the PS5 gift card monitor on an Android phone (Termux).
 #
-#   ps5 start | stop | restart | status | test | check | extensive | saver | setup | log | update | export | boost
+#   ps5 start | stop | restart | status | test | check | probe | browser | extensive | saver | setup | log
+#       | update | export | boost
 #
 # The home-screen buttons call these same commands.
 
@@ -193,6 +194,10 @@ export_files() {
   mkdir -p "$dest"
   rm -f "$dest"/*
   [ -f "$STATE_DIR/selftest.txt" ] && cp "$STATE_DIR/selftest.txt" "$dest/" && n=$((n + 1))
+  [ -f "$STATE_DIR/probe.txt" ] && cp "$STATE_DIR/probe.txt" "$dest/" && n=$((n + 1))
+  for f in "$STATE_DIR"/browser.log "$STATE_DIR"/browser-check.log; do
+    [ -f "$f" ] && tail -n 200 "$f" >"$dest/$(basename "$f" .log)-log.txt" && n=$((n + 1))
+  done
   [ -f "$LOG" ] && tail -n 400 "$LOG" >"$dest/monitor-log.txt" && n=$((n + 1))
   for f in "$STATE_DIR"/debug/*.html; do
     [ -f "$f" ] || continue
@@ -238,6 +243,39 @@ PY
   fi
 }
 
+browser() {
+  # A real browser engine (Chromium). When Amazon answers with a bot check,
+  # the bot reads the page with it: it runs Amazon's check like any visitor's
+  # browser, so the check isn't lost. No window; it starts only when needed.
+  case "${1:-install}" in
+    remove)
+      pkg uninstall -y chromium </dev/null
+      rm -rf "$STATE_DIR/browser" "$STATE_DIR/browser-check"
+      say "Browser removed; the bot uses its other request styles."
+      if is_running; then stop; start; fi
+      ;;
+    *)
+      echo "Installing Chromium, a real browser engine (about 150 MB to download, 1 GB of space - use Wi-Fi)."
+      echo "When Amazon asks for a bot check, the bot then reads the page with it, so no check is lost."
+      if ! { pkg install -y x11-repo </dev/null && pkg install -y chromium </dev/null; }; then
+        echo "Could not install Chromium (see above). Run 'pkg update' and try 'ps5 browser' again."
+        return 1
+      fi
+      if ! command -v headless_shell >/dev/null 2>&1 && ! command -v chromium-browser >/dev/null 2>&1; then
+        echo "Chromium was installed, but its program was not found."
+        return 1
+      fi
+      say "Browser installed."
+      if is_running; then stop; start; fi # the monitor looks for it when it starts
+      rm -rf "$LOCK"                      # the test below takes minutes; don't block the buttons
+      trap - EXIT
+      echo
+      echo "Now testing which way of asking works best on this network (about 3 minutes)..."
+      python -m scanamzn -c "$CONFIG" probe --send
+      ;;
+  esac
+}
+
 install_shortcuts() {
   # Termux:Widget only accepts real files inside ~/.shortcuts (no symlinks).
   local dir="$HOME/.shortcuts" boot="$HOME/.termux/boot" ps5="$PREFIX/bin/ps5"
@@ -254,6 +292,7 @@ install_shortcuts() {
   shortcut "PS5 Test alert" "\"$ps5\" test; $pause"
   shortcut "PS5 Settings" "\"$ps5\" setup; $pause"
   shortcut "PS5 Check now" "\"$ps5\" check; $pause"
+  shortcut "PS5 Test connection" "\"$ps5\" probe; $pause"
   shortcut "PS5 Data saver" "\"$ps5\" saver; sleep 5"
   shortcut "PS5 Extensive mode" "\"$ps5\" extensive; sleep 5"
   chmod 700 "$dir"
@@ -291,6 +330,8 @@ case "${1:-status}" in
   running) is_running ;;
   test) need_config; ensure_packages; python -m scanamzn -c "$CONFIG" test-notify ;;
   check) need_config; ensure_packages; python -m scanamzn -c "$CONFIG" selftest --send ;;
+  probe) need_config; ensure_packages; python -m scanamzn -c "$CONFIG" probe --send ;;
+  browser) need_config; take_lock; ensure_packages; browser "${2:-install}" ;;
   saver) saver "${2:-toggle}" ;;
   extensive) extensive "${2:-toggle}" ;;
   export) export_files ;;
@@ -306,7 +347,7 @@ case "${1:-status}" in
   _after-update) take_lock; after_update "${2:-0}" ;;
   install-shortcuts) install_shortcuts ;;
   *)
-    echo "usage: ps5 start|stop|restart|status|test|check|extensive [on|off]|saver [on|off]|setup|log|update|export|boost"
+    echo "usage: ps5 start|stop|restart|status|test|check|probe|browser [remove]|extensive [on|off]|saver [on|off]|setup|log|update|export|boost"
     exit 2
     ;;
 esac

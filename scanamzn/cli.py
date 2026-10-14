@@ -45,13 +45,17 @@ def _setup_logging(verbose: bool, log_file: str = "", tz: tzinfo | None = None) 
         logging.getLogger(name).setLevel(logging.WARNING)
 
 
-def _fetcher(s: Settings) -> Fetcher:
+def _fetcher(s: Settings, browser_dir: str = "browser") -> Fetcher:
+    """The monitor's fetcher (and the self-test's, with its own browser
+    profile folder: two browsers can't share one)."""
     from .budget import RequestBudget
     from .selftest import state_dir
 
-    budget = RequestBudget(state_dir(s) / "request-times", s.max_requests_per_minute)
+    folder = state_dir(s)
+    budget = RequestBudget(folder / "request-times", s.max_requests_per_minute)
     return Fetcher(s.domain, timeout=s.request_timeout, backend=s.http_backend, proxy=s.proxy, budget=budget,
-                   profile_file=state_dir(s) / "request-profile")
+                   profile_file=folder / "request-profile", ranking_file=folder / "request-ranking",
+                   browser_path=s.browser_path, browser_dir=folder / browser_dir)
 
 
 def _zone_name(s: Settings) -> str:
@@ -261,7 +265,7 @@ def cmd_selftest(args: argparse.Namespace, s: Settings) -> int:
         if hasattr(signal, name):
             signal.signal(getattr(signal, name), lambda signum, _frame: sys.exit(128 + signum))
     rng = random.Random()
-    fetcher = _fetcher(s)
+    fetcher = _fetcher(s, browser_dir="browser-check")
     fetcher.wait = pace
     try:
         with selftest.monitor_paused(s):  # a running monitor waits meanwhile
@@ -287,19 +291,88 @@ def cmd_selftest(args: argparse.Namespace, s: Settings) -> int:
     icon, word = {"pass": ("✅", "passed"), "fail": ("❌", "found a problem"),
                   "inconclusive": ("⚠️", "was not conclusive")}[result.verdict]
     if args.send:
-        notifiers = build_notifiers(s)
-        if notifiers:
-            dispatcher = Dispatcher(notifiers, retries=3)  # mobile networks drop a request now and then
-            try:
-                dispatcher.send_and_wait(Message(
-                    subject=f"{icon} PS5 monitor self-test {word}",
-                    body=text,
-                    summary=f"PS5 monitor self-test {word}",
-                    kind=INFO,
-                ))
-            finally:
-                dispatcher.close()
+        _send_report(s, f"{icon} PS5 monitor self-test {word}", text, f"PS5 monitor self-test {word}")
     return {"pass": 0, "fail": 1, "inconclusive": 3}[result.verdict]
+
+
+def _send_report(s: Settings, subject: str, body: str, summary: str) -> None:
+    notifiers = build_notifiers(s)
+    if not notifiers:
+        return
+    dispatcher = Dispatcher(notifiers, retries=3)  # mobile networks drop a request now and then
+    try:
+        dispatcher.send_and_wait(Message(subject=subject, body=body, summary=summary, kind=INFO))
+    finally:
+        dispatcher.close()
+
+
+def cmd_probe(args: argparse.Namespace, s: Settings) -> int:
+    """Try every request style on the watched cards and keep the order that works."""
+    from . import probe, selftest
+
+    folder = selftest.state_dir(s)
+    debug = selftest.debug_dir(s)
+    for old in debug.glob("probe_*.html"):
+        old.unlink(missing_ok=True)
+
+    def dump(key: str, html: str) -> None:
+        try:
+            debug.mkdir(parents=True, exist_ok=True)
+            (debug / ("".join(c if c.isalnum() else "_" for c in key)[:60] + ".html")).write_text(html, encoding="utf-8")
+        except OSError as exc:
+            log.warning("could not save a page: %s", exc)
+
+    def make_fetcher(name: str) -> Fetcher:
+        # Just this style, no browser rescue, nothing remembered: a clean measurement.
+        f = Fetcher(s.domain, timeout=s.request_timeout, backend=s.http_backend, proxy=s.proxy,
+                    browser_path=s.browser_path, browser_dir=folder / "browser-check", rescue=False, only=name)
+        f.wait = time.sleep
+        return f
+
+    for name in ("SIGHUP", "SIGTERM"):
+        if hasattr(signal, name):
+            signal.signal(getattr(signal, name), lambda signum, _frame: sys.exit(128 + signum))
+    everything = Fetcher(s.domain, backend=s.http_backend, browser_path=s.browser_path)
+    styles = list(args.style or everything.profiles)
+    browser_missing = everything.browser_path is None and s.http_backend == "auto"
+    asins = (s.focus_asins or s.asins)[:2]
+    if not asins:
+        print("No product pages are watched (only searches), so there is nothing to probe.")
+        return 2
+    urls = [(a, everything.product_url(a)) for a in asins]
+    # The monitor's own pace: its interval spread over the cards it watches.
+    interval = s.focus_interval_seconds if s.focus_asins else s.interval_seconds
+    spacing = args.spacing or max(interval / len(asins), probe.MIN_SPACING_SECONDS)
+    print(f"Testing {len(styles)} request styles, {args.tries} pages each, {spacing:.0f} s apart "
+          f"(about {len(styles) * (args.tries * spacing + probe.BETWEEN_STYLES_SECONDS) / 60:.0f} min)."
+          " The monitor waits meanwhile.", flush=True)
+    with selftest.monitor_paused(s):
+        results = probe.run(urls, styles, make_fetcher, wait=time.sleep,
+                            progress=lambda text: print(text, flush=True),
+                            spacing=spacing, tries=args.tries, dump=dump)
+    ranking = probe.rank(results)
+    best = next((r for r in results if r.name == ranking[0]), None)
+    adopted = best is not None and best.read > 0
+    if adopted:
+        # Styles not tested this time (e.g. --style) keep their place after the tested ones.
+        rest = [p for p in Fetcher(s.domain, backend=s.http_backend, browser_path=s.browser_path,
+                                   ranking_file=folder / "request-ranking").profiles if p not in ranking]
+        ranking += rest
+        try:
+            probe.save_ranking(folder / "request-ranking", folder / "request-profile", ranking)
+        except OSError as exc:
+            log.error("could not save the result: %s", exc)
+            adopted = False
+    text = probe.summary(results, ranking, adopted, args.tries, spacing, browser_missing)
+    print("\n" + text)
+    try:
+        (folder / "probe.txt").write_text(text + "\n", encoding="utf-8")
+    except OSError:
+        pass
+    if args.send:
+        icon = "✅" if adopted and best.read == best.tries else ("⚠️" if adopted else "❌")
+        _send_report(s, f"{icon} PS5 monitor connection test", text, "PS5 monitor connection test")
+    return 0 if adopted else 3
 
 
 def cmd_status(args: argparse.Namespace, s: Settings) -> int:
@@ -376,6 +449,11 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("status", help="show what the running monitor is doing")
     p = sub.add_parser("selftest", help="check against the live site that the bot reads Amazon.in correctly")
     p.add_argument("--send", action="store_true", help="also send the result by e-mail/Telegram")
+    p = sub.add_parser("probe", help="find which request styles get Amazon's pages on this network")
+    p.add_argument("--send", action="store_true", help="also send the result by e-mail/Telegram")
+    p.add_argument("--tries", type=int, default=4, help="pages per style (default 4)")
+    p.add_argument("--spacing", type=float, help="seconds between pages (default: the monitor's pace)")
+    p.add_argument("--style", action="append", help="test only this style (repeatable)")
     sub.add_parser("setup", help="answer a few questions to create the config file")
     p = sub.add_parser("parse", help="parse a saved Amazon page (for debugging)")
     p.add_argument("file")
@@ -401,6 +479,7 @@ def main(argv: list[str] | None = None) -> int:
             "check-config": cmd_check_config,
             "status": cmd_status,
             "selftest": cmd_selftest,
+            "probe": cmd_probe,
         }
         return commands[args.command](args, settings)
     except (ConfigError, FetchError) as exc:

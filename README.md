@@ -33,13 +33,24 @@ Every ~45 seconds (randomised), the bot:
    A watched card that comes back at such a price sends an *IN STOCK above your
    price limit* alert (at most hourly); resellers' listings that are always in
    stock at a markup stay quiet. When the price drops to normal, it alerts.
-5. **Recovers quickly when Amazon shows a bot check.** It retries after 60 s,
-   120 s, then every `monitor.max_backoff_seconds` (180 s) with a fresh session,
-   and after two bot checks in a row switches its *request style*
+5. **Keeps checking when Amazon shows a bot check.** Amazon sometimes answers
+   with an AWS WAF JavaScript challenge instead of the page. With a Chromium
+   installed (`ps5 browser` on the phone; `amazon.browser_path` elsewhere), the
+   bot loads such a page at once in a headless browser, which runs the
+   challenge like any visitor's browser, so the check succeeds within seconds
+   (`scanamzn/browser.py`: DevTools protocol over a private pipe; only the HTML
+   and the challenge's script are loaded, then further pages are read with
+   `fetch()` from that tab). The browser keeps its own identity and never solves
+   a CAPTCHA. After two bot checks in a row the bot switches its *request style*
    (`fetcher.PROFILES`: "legacy" - desktop Chrome 140 with a first visit to the
-   home page, the style that ran for hours on a phone without a block - then
-   "plain", then "client-hints"). The style that works is remembered in
-   `request-profile` next to the status file. If no check has succeeded for 10
+   home page, the style that ran for hours on a phone without a block -
+   "browser", "curl" - the curl program over HTTP/2 - "plain", "client-hints",
+   and "chrome-tls" when `curl_cffi` is installed); without a browser it retries
+   after 60 s, 120 s, then every `monitor.max_backoff_seconds` (180 s). The style
+   that works is remembered in `request-profile` next to the status file.
+   `scanamzn probe` (`ps5 probe`) tries every style on the watched cards at the
+   monitor's pace and stores the order that works in `request-ranking`, which a
+   running monitor picks up. If no check has succeeded for 10
    minutes (`health_alert_after_minutes`), you get a warning so you know the
    bot can't see restocks. When checks work again, you get a recovery message.
 
@@ -281,11 +292,12 @@ listing): a restock in an unfamiliar layout must not go unnoticed.
 
 ## Troubleshooting
 
-* **"Amazon is showing a captcha"**: the bot already backs off and changes
-  session automatically. If it happens constantly, raise `interval_seconds`,
-  reduce the number of searches, or run from a different network.
-  `curl_cffi` (installed by default) matters here: it makes the requests look
-  like Chrome's at the TLS level.
+* **"Amazon showed a bot check"**: install a Chromium (`ps5 browser` on the
+  phone, or set `amazon.browser_path`) so such pages are read with it at once,
+  and run `scanamzn probe` to find the request styles that work on your
+  network. Without one the bot backs off and changes session and request
+  style by itself. If it happens constantly, raise `interval_seconds`, reduce
+  the number of searches, or run from a different network.
 * **A product shows as `unknown`**: Amazon changed its page layout. Set
   `monitor.debug_dump_dir = "debug_pages"`. Unrecognised pages are saved there,
   and you can inspect one with `python -m scanamzn parse debug_pages/<file>.html`.
@@ -305,7 +317,9 @@ they run offline.
 
 ## Notes
 
-This is a personal restock notifier. It does not buy anything, solve captchas
-or get around Amazon's protections, and it polls about as often as a person
-refreshing a page. Automated access may still be against Amazon's Conditions of
+This is a personal restock notifier. It does not buy anything or solve
+CAPTCHAs. When Amazon asks for its JavaScript browser check, the bot either
+waits or, with the optional browser engine, loads the page in an undisguised
+headless Chromium that runs the check the way any visitor's browser does. It
+polls about as often as a person refreshing a page. Automated access may still be against Amazon's Conditions of
 Use, so keep the polling rate modest and use it at your own risk.

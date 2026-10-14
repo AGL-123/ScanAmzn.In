@@ -157,6 +157,7 @@ class Settings:
     focus_asins: list[str] = field(default_factory=list)
     search_queries: list[str] = field(default_factory=lambda: list(DEFAULT_QUERIES))
     http_backend: str = "auto"
+    browser_path: str = ""  # a Chromium program (default: found on PATH)
     proxy: str = ""
     request_timeout: float = 20.0
     # [monitor]
@@ -261,6 +262,9 @@ def from_dict(data: dict[str, Any]) -> Settings:
     s.asins = list(dict.fromkeys(s.asins))
     s.search_queries = [q for q in amazon.list("search_queries", s.search_queries) if q.strip()]
     s.http_backend = amazon.str("http_backend", s.http_backend)
+    if s.http_backend not in ("auto", "requests", "curl_cffi", "curl", "browser"):
+        raise ConfigError("amazon.http_backend must be auto, requests, curl_cffi, curl or browser")
+    s.browser_path = amazon.str("browser_path", s.browser_path)
     s.proxy = amazon.str("proxy", s.proxy)
     s.request_timeout = amazon.float("request_timeout", s.request_timeout)
     if not s.asins and not s.search_queries and not s.focus_asins:

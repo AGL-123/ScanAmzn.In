@@ -141,8 +141,9 @@ the Telegram message arrive. Finally, answer yes to **start the monitor**.
 2. Find **Termux** (Play Store version) or **Termux:Widget** (F-Droid), and drag
    the widget onto the home screen.
 3. It lists the buttons: **PS5 Start**, **PS5 Stop**, **PS5 Status**,
-   **PS5 Test alert**, **PS5 Settings**, **PS5 Check now** and **PS5 Data
-   saver**. Tap the widget's refresh icon if they don't show up yet.
+   **PS5 Test alert**, **PS5 Settings**, **PS5 Check now**, **PS5 Test
+   connection**, **PS5 Extensive mode** and **PS5 Data saver**. Tap the
+   widget's refresh icon if they don't show up yet.
 4. Allow Termux to **display over other apps** (Settings → Apps → Termux →
    *Display over other apps* → Allow). Without it the buttons only open after
    you tap the Termux notification.
@@ -194,6 +195,39 @@ bot can't warn you itself. A free outside service can:
 The bot checks in every few minutes while it runs. If it goes quiet for half
 an hour, healthchecks.io e-mails you, and you can tap **PS5 Start**.
 
+## Step 7 (recommended): Add the browser engine, so no check is lost (10 min, Wi-Fi)
+
+Now and then Amazon answers the bot with a **bot check** instead of the page:
+a short page with a JavaScript test that only a real web browser can run (your
+phone's browser runs it without you noticing). The bot's normal requests can't,
+so without help they have to wait and try again a minute later.
+
+Type this in Termux, on Wi-Fi:
+
+```
+ps5 browser
+```
+
+It installs **Chromium** (the open-source engine of Chrome) from Termux's own
+repository: about 150 MB to download and 1 GB of space. The bot never shows a
+window. From then on, when Amazon asks for a bot check, the bot loads that page
+with the browser engine at once: it runs Amazon's test like any visitor's
+browser, so the check succeeds within seconds instead of being lost. If Amazon
+keeps asking, the bot reads every page through the browser until it stops.
+
+* It does not hide what it is (it says it's a headless Chrome), and it never
+  solves picture puzzles (CAPTCHAs). If Amazon shows one, the bot waits and
+  warns you as before.
+* It loads only Amazon's page itself and the test's script: no pictures, ads or
+  other scripts, so data use stays the same.
+* It needs about 200-400 MB of memory while it runs. On **Android 14 or newer**,
+  make sure Step 5.4 (*Disable child process restrictions*) is on: Android
+  otherwise closes apps that start several processes, as a browser does.
+* When it's installed, `ps5 browser` runs **PS5 Test connection** (below) by
+  itself and sends you the result.
+
+To remove it again: `ps5 browser remove`.
+
 ---
 
 ## Everyday use
@@ -206,12 +240,14 @@ an hour, healthchecks.io e-mails you, and you can tap **PS5 Start**.
 | **PS5 Test alert** | Sends a test message on every channel you set up. |
 | **PS5 Settings** | Asks the setup questions again, including how often to check in each mode (focused mode: every 10 seconds or more). Press Enter to keep an answer, type `-` to remove a channel. Restarts the bot with the new settings. |
 | **PS5 Check now** | Self-test against the real Amazon.in: shows what it finds and whether it would see a restock, and sends the result to Telegram/e-mail (see below). |
+| **PS5 Test connection** | Tries every way the bot can ask Amazon for a page (*request styles*: the bot's own requests in a few variants, the curl program, the browser engine from Step 7) on the two main cards, at the bot's own pace, and sends you a table of which got through. The bot then uses them in that order. Takes 2-4 minutes; the bot pauses meanwhile. Use it when **PS5 Status** shows bot checks often, or after moving to another network. |
 | **PS5 Extensive mode** | Switches between the default **focused mode** (only the two cards that come back most often, Rs.4000 and Rs.2000, every 30 s unless you chose otherwise in PS5 Settings) and the **extensive mode** (every value from Rs.500 to Rs.12,000 plus Amazon searches, every ~60 s). Tap again to switch back. |
 | **PS5 Data saver** | On mobile data, tap this **instead of stopping the bot**: it checks fewer pages, half as often. Tap it again on Wi-Fi. |
 
 The same commands work typed in Termux: `ps5 start`, `ps5 stop`, `ps5 status`,
-`ps5 test`, `ps5 setup`, `ps5 check`, `ps5 extensive` and `ps5 saver` (each
-also with `on` / `off`),
+`ps5 test`, `ps5 setup`, `ps5 check`, `ps5 probe` (PS5 Test connection),
+`ps5 browser` (Step 7), `ps5 extensive` and `ps5 saver` (each also with `on` /
+`off`),
 `ps5 log` (recent log lines),
 `ps5 update` (download the latest version of the bot) and `ps5 export` (see
 below).
@@ -325,8 +361,9 @@ Data saver** rather than stopping the bot: it halves the checks (focused mode:
 the two cards at twice your interval - every ~60 s at the default 30 s, about
 0.4-0.8 GB a day; every ~20 s if you chose 10 s, about 1.3-2.5 GB; extensive
 mode: only the four main cards and no searches, but every value as soon as any
-card comes back). Tap it again on Wi-Fi. Battery use
-is modest, but keep the phone on the charger if you can.
+card comes back). Tap it again on Wi-Fi. The browser
+engine (Step 7) reads the same pages without pictures, so it adds almost
+nothing. Battery use is modest, but keep the phone on the charger if you can.
 
 ## Troubleshooting
 
@@ -346,19 +383,22 @@ is modest, but keep the phone on the charger if you can.
 * **PS5 Status says NOT RUNNING**: tap **PS5 Start**. If it keeps stopping by
   itself, Android is killing Termux. Redo Step 5. When Android kills Termux,
   it does not restart by itself until you open it.
-* **"Amazon showed a bot check" in the status or log**: Amazon is refusing the
-  bot's request for a moment. The bot tries again after 1, 2, then every 3
-  minutes, and after two bot checks in a row it changes how its requests look
-  (*request style* - PS5 Status shows which one works and how many pages it
-  has read). It remembers the style that works, also after a restart. A block
-  right after starting is common. If it happens a lot, type `ps5 boost` (Wi-Fi
-  recommended, 5-10 minutes). It
-  installs a network library that looks like the Chrome browser to Amazon,
-  which Amazon challenges far less. It tests itself and removes itself again if
-  it doesn't work on your phone. **PS5 Check now** then shows *via curl_cffi*
-  instead of *via requests*. You can also choose a longer interval in **PS5
-  Settings**. Captchas apply to your whole internet connection, so you may
-  briefly see them too when you browse Amazon on the same Wi-Fi.
+* **"Amazon showed a bot check" in the status or log**: Amazon refused the
+  bot's request with a bot check. **The fix is Step 7** (`ps5 browser`): with
+  the browser engine installed, such a page is read by the browser right away
+  and the check isn't lost; the log then says *reading the page with the
+  browser*. Without it, the bot tries again after 1, 2, then every 3 minutes,
+  and after two bot checks in a row it changes how its requests look
+  (*request style*). **PS5 Status** shows each style it used and how many
+  pages it read. It remembers the style that works, also after a restart.
+  Tap **PS5 Test connection** to measure all styles on your network and let
+  the bot use the best one. Checking less often (**PS5 Settings**) also helps:
+  Amazon is stricter with frequent requests. Bot checks apply to your whole
+  internet connection, so you may briefly see them too when you browse Amazon
+  on the same Wi-Fi.
+* **"Amazon shows a CAPTCHA"**: Amazon wants a picture puzzle solved, which the
+  bot never does. It waits and tries again; if it keeps happening, check less
+  often for a while (**PS5 Settings**) or switch networks.
 * **Buttons don't appear in the widget**: open Termux once, then tap the
   widget's refresh icon. Termux and its add-ons must come from the same store.
 * **Something else**: `ps5 log` shows the last log lines.

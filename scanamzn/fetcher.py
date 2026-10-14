@@ -1,15 +1,20 @@
 """HTTP access to Amazon.in.
 
-Amazon fingerprints the TLS handshake as well as headers, so plain ``requests``
-gets far more captchas than a real browser. When ``curl_cffi`` is installed we
-use it to impersonate Chrome's TLS/HTTP2 fingerprint; ``requests`` is the
-fallback.
+Amazon answers some requests with a bot check (an AWS WAF JavaScript
+challenge) instead of the page. Which requests depends on the network, the
+pace and how the requests look, so the fetcher has several request styles
+(PROFILES) and moves to the next one when Amazon keeps stopping the current
+one. When a real Chromium browser is installed on the phone, a page that gets
+a bot check is read with it at once: the browser runs Amazon's challenge the
+way it does for any visitor, so the check isn't lost.
 """
 
 from __future__ import annotations
 
 import logging
 import random
+import shutil
+import tempfile
 import time
 from dataclasses import dataclass
 from datetime import date
@@ -17,6 +22,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 from urllib.parse import quote_plus
 
+from .browser import BrowserSession, find_browser
+from .curl import CurlSession
 from .parser import is_blocked
 
 if TYPE_CHECKING:
@@ -77,13 +84,37 @@ def chrome_headers(rotation: int, today: date | None = None) -> dict[str, str]:
     }
 
 
-# How the bot's requests look, tried in this order: after two bot checks in a
-# row the next one is used, and the one that last worked is remembered (also
-# across restarts). Amazon's answer depends on the network. On the user's home
-# connection in October 2026, "legacy" - desktop Chrome 140, no client hints,
-# a first visit to the home page - ran for 6 hours without a single bot check
-# after the first request, while "client-hints" was challenged again and again.
-PROFILES = ("legacy", "plain", "client-hints")
+# How the bot's requests look. Amazon's answer depends on the network and
+# changes over time, so the bot tries them in this order: after two bot checks
+# in a row it moves to the next one, and the one that last worked is
+# remembered (also across restarts). `ps5 probe` measures them all on the
+# phone and puts them in the order that works there (request-ranking).
+@dataclass(frozen=True)
+class Profile:
+    name: str
+    # "requests" (Python), "curl_cffi" (Chrome's TLS, after `ps5 boost`), "curl"
+    # (the curl program: HTTP/2 and its own TLS) or "browser" (a real Chromium).
+    transport: str = "requests"
+    # "legacy": the Chrome 140 user agent that ran for hours; "current": today's Chrome.
+    user_agent: str = "legacy"
+    hints: bool = False  # Chrome's client hints (sec-ch-ua...)
+    warm_up: bool = False  # a first visit to the home page and a short pause
+    http2: bool = False
+    about: str = ""
+
+
+PROFILES = (
+    Profile("chrome-tls", transport="curl_cffi", about="Chrome's network fingerprint (ps5 boost)"),
+    # On the user's home connection in October 2026 this one ran for 6 hours
+    # (3-5 requests a minute) without a bot check after the first request.
+    Profile("legacy", warm_up=True, about="desktop Chrome 140, home page first"),
+    Profile("browser", transport="browser", about="a real Chromium browser on the phone (ps5 browser)"),
+    Profile("curl", transport="curl", warm_up=True, http2=True, about="the curl program over HTTP/2"),
+    Profile("plain", user_agent="current", about="today's desktop Chrome"),
+    Profile("client-hints", user_agent="current", hints=True, about="today's desktop Chrome with client hints"),
+)
+PROFILE_NAMES = tuple(p.name for p in PROFILES)
+TRANSPORTS = ("requests", "curl_cffi", "curl", "browser")
 _LEGACY_USER_AGENTS = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/140.0.0.0 Safari/537.36",
@@ -93,6 +124,9 @@ _LEGACY_USER_AGENTS = (
     "Chrome/140.0.0.0 Safari/537.36",
 )
 BLOCKS_BEFORE_SWITCH = 2  # the first request of a fresh session is often challenged anyway
+ERRORS_BEFORE_SWITCH = 3  # e.g. curl without HTTP/2, or a browser that keeps crashing
+# After the browser failed, it rescues pages again only after this (doubling, up to 30 min).
+RESCUE_PAUSE_SECONDS = 60.0
 
 _BROWSER_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
@@ -109,11 +143,20 @@ class FetchError(Exception):
     pass
 
 
+class Stopped(FetchError):
+    """The bot is stopping (while waiting for the request budget)."""
+
+
 @dataclass
 class Page:
     url: str
     status_code: int
     text: str
+    profile: str = ""  # the request style that loaded it
+
+    @property
+    def blocked(self) -> bool:
+        return is_blocked(self.text, self.status_code)
 
 
 class Fetcher:
@@ -125,38 +168,76 @@ class Fetcher:
         proxy: str = "",
         budget: RequestBudget | None = None,
         profile_file: str | Path | None = None,
+        ranking_file: str | Path | None = None,
+        browser_path: str = "",
+        browser_dir: str | Path | None = None,
+        rescue: bool = True,
+        only: str | None = None,
     ):
         self.domain = domain
         self.timeout = timeout
         self.proxy = proxy or None
-        if backend == "auto":
-            backend = "curl_cffi" if cffi_requests is not None else "requests"
-        if backend == "curl_cffi" and cffi_requests is None:
-            raise FetchError("http_backend is 'curl_cffi' but curl_cffi is not installed")
-        if backend not in ("curl_cffi", "requests"):
+        if backend != "auto" and backend not in TRANSPORTS:
             raise FetchError(f"unknown http_backend {backend!r}")
-        self.backend = backend
+        self.curl_path = shutil.which("curl")
+        self.browser_path = find_browser(browser_path)
+        self.browser_dir = Path(browser_dir) if browser_dir else Path(tempfile.gettempdir()) / "scanamzn-browser"
+        usable = [p for p in PROFILES if (backend == "auto" or p.transport == backend) and self._installed(p)]
+        if only is not None:
+            usable = [p for p in usable if p.name == only]
+        if not usable:
+            what = only or backend
+            raise FetchError(f"request style {what!r} is not available on this device (not installed?)")
+        self._usable = {p.name: p for p in usable}
+        self.profiles: tuple[str, ...] = tuple(p.name for p in usable)
         # Random start, so every run doesn't open with the same fingerprint.
         self._rotation = random.randrange(len(_IMPERSONATE) * len(_PLATFORMS))
-        self._session = None
+        self._sessions: dict[str, Any] = {}
         # At most so many requests a minute, shared with the other bot processes.
         self.budget = budget
         # Waits for the budget; the monitor swaps in its stop event's wait, so
         # stopping isn't held up (a true result means: give up).
         self.wait: Callable[[float], Any] = time.sleep
-        # Request profiles (see PROFILES); curl_cffi has its own fingerprints.
-        self.profiles = PROFILES if backend == "requests" else (backend,)
+        self.clock: Callable[[], float] = time.monotonic
         self.profile_file = Path(profile_file) if profile_file else None
+        self.ranking_file = Path(ranking_file) if ranking_file else None
+        self._ranking_mtime: float | None = None
+        self._apply_ranking(initial=True)
         self._remembered = self._read_profile()
         self.profile_index = self.profiles.index(self._remembered) if self._remembered in self.profiles else 0
-        self.stats = {p: {"ok": 0, "blocked": 0} for p in self.profiles}
+        self.stats = {p: {"ok": 0, "blocked": 0, "errors": 0} for p in self.profiles}
         self._blocked_in_a_row = 0
-        log.debug("HTTP backend: %s, request profile %s", backend, self.profile)
+        self._errors_in_a_row = 0
+        self._switch_to: str | None = None  # after the next reset() or before the next get()
+        # The browser reads a page the current style can't get past a bot
+        # check (it runs Amazon's challenge like any visitor's browser).
+        self.rescue = rescue and "browser" in self._usable
+        self._rescue_failures = 0
+        self._rescue_paused_until = 0.0
+        log.debug("request styles: %s; starting with %s", ", ".join(self.profiles), self.profile)
+
+    def _installed(self, p: Profile) -> bool:
+        if p.transport == "curl_cffi":
+            return cffi_requests is not None
+        if p.transport == "curl":
+            return self.curl_path is not None
+        if p.transport == "browser":
+            return self.browser_path is not None
+        return True
 
     @property
     def profile(self) -> str:
         return self.profiles[self.profile_index]
 
+    @property
+    def current(self) -> Profile:
+        return self._usable[self.profile]
+
+    @property
+    def backend(self) -> str:
+        return self.current.transport
+
+    # -- remembered style and the connection test's ranking ---------------------
     def _read_profile(self) -> str | None:
         try:
             return self.profile_file.read_text(encoding="ascii").strip() if self.profile_file else None
@@ -173,6 +254,34 @@ class Fetcher:
         except OSError as exc:
             log.debug("could not save the request profile: %s", exc)
 
+    def _apply_ranking(self, initial: bool = False) -> None:
+        """Use the order `ps5 probe` found best (re-read whenever it changes)."""
+        if self.ranking_file is None:
+            return
+        try:
+            mtime = self.ranking_file.stat().st_mtime
+        except OSError:
+            mtime = None
+        if mtime == self._ranking_mtime:
+            return
+        self._ranking_mtime = mtime
+        if mtime is None:
+            return
+        try:
+            names = self.ranking_file.read_text(encoding="ascii").split()
+        except (OSError, UnicodeDecodeError):
+            return
+        ranked = [n for n in dict.fromkeys(names) if n in self._usable]
+        if not ranked:
+            return
+        self.profiles = tuple(ranked + [p for p in self.profiles if p not in ranked])
+        if not initial:
+            self.close()
+            self.profile_index = 0
+            self._blocked_in_a_row = self._errors_in_a_row = 0
+            self._switch_to = None
+            log.info("using the connection test's order of request styles: %s", ", ".join(self.profiles))
+
     # -- URLs ---------------------------------------------------------------
     def product_url(self, asin: str) -> str:
         return f"https://{self.domain}/dp/{asin}"
@@ -186,37 +295,45 @@ class Fetcher:
         return f"https://{self.domain}/gp/aws/cart/add.html?ASIN.1={asin}&Quantity.1=1"
 
     # -- sessions -----------------------------------------------------------
-    def _new_session(self):
+    def _new_session(self, p: Profile):
         cookies = {"i18n-prefs": "INR", "lc-acbin": "en_IN"}
         proxies = {"http": self.proxy, "https": self.proxy} if self.proxy else None
-        if self.backend == "curl_cffi":
+        if p.transport == "curl_cffi":
             target = _IMPERSONATE[self._rotation % len(_IMPERSONATE)]
             session = cffi_requests.Session(impersonate=target, proxies=proxies)
             session.headers.update({"Accept-Language": _BROWSER_HEADERS["Accept-Language"]})
             log.debug("new curl_cffi session impersonating %s", target)
+        elif p.transport == "browser":
+            session = BrowserSession(
+                self.browser_path or "chromium", self.domain, self.browser_dir, proxy=self.proxy,
+                log_path=self.browser_dir.with_name(self.browser_dir.name + ".log"), wait=self.wait,
+            )
         else:
-            session = requests.Session()
-            if proxies:
-                session.proxies.update(proxies)
-            session.headers.update(_BROWSER_HEADERS)
-            if self.profile == "legacy":
-                session.headers["User-Agent"] = _LEGACY_USER_AGENTS[self._rotation % len(_LEGACY_USER_AGENTS)]
-            elif self.profile == "plain":
-                session.headers["User-Agent"] = chrome_headers(self._rotation)["User-Agent"]
+            if p.transport == "curl":
+                session = CurlSession(self.curl_path or "curl", http2=p.http2, proxy=self.proxy)
             else:
+                session = requests.Session()
+                if proxies:
+                    session.proxies.update(proxies)
+            session.headers.update(_BROWSER_HEADERS)
+            if p.user_agent == "legacy":
+                session.headers["User-Agent"] = _LEGACY_USER_AGENTS[self._rotation % len(_LEGACY_USER_AGENTS)]
+            elif p.hints:
                 session.headers.update(chrome_headers(self._rotation))
+            else:
+                session.headers["User-Agent"] = chrome_headers(self._rotation)["User-Agent"]
         for name, value in cookies.items():
             session.cookies.set(name, value, domain=self.domain.removeprefix("www"))
-        if self.profile == "legacy":
+        if p.warm_up:
             self._warm_up(session)
         return session
 
     def _warm_up(self, session) -> None:
-        """The legacy profile's first visit to the home page and short pause.
-        Amazon answers that page with a JavaScript challenge, but after it the
-        product pages loaded for hours (the other profiles skip it)."""
+        """A first visit to the home page and short pause. Amazon answers that
+        page with a JavaScript challenge, but after it the product pages loaded
+        for hours (the "legacy" style)."""
         if self.budget is not None and not self.budget.acquire(self.wait):
-            raise FetchError("stopped while pacing requests")
+            raise Stopped("stopped while pacing requests")
         try:
             session.get(f"https://{self.domain}/", timeout=self.timeout)
         except Exception as exc:  # noqa: BLE001 - warm-up is best effort
@@ -224,39 +341,104 @@ class Fetcher:
         self.wait(random.uniform(2.0, 4.0))
 
     def reset(self) -> None:
-        """After a bot check: drop cookies; after BLOCKS_BEFORE_SWITCH of them
-        in a row, also switch to the next request profile."""
+        """After a bot check: a fresh session (new cookies); after
+        BLOCKS_BEFORE_SWITCH of them in a row, also the next request style."""
         self._rotation += random.randint(1, 3)
-        self._blocked_in_a_row += 1
-        if self._blocked_in_a_row >= BLOCKS_BEFORE_SWITCH and len(self.profiles) > 1:
-            self._blocked_in_a_row = 0
-            self.profile_index = (self.profile_index + 1) % len(self.profiles)
-            log.info("Amazon keeps showing bot checks; trying request style %r next", self.profile)
-        self.close()
+        self._close_session(self.profile)
+        self._switch_if_due()
 
-    def close(self) -> None:
-        if self._session is not None:
+    def _switch_if_due(self) -> None:
+        target, self._switch_to = self._switch_to, None
+        if target is None or len(self.profiles) < 2:
+            return
+        old = self.profile
+        if target == "" or target not in self.profiles:
+            self.profile_index = (self.profile_index + 1) % len(self.profiles)
+            if self.profile == "browser" and self.clock() < self._rescue_paused_until and len(self.profiles) > 2:
+                self.profile_index = (self.profile_index + 1) % len(self.profiles)  # it just failed
+        else:
+            self.profile_index = self.profiles.index(target)
+        self._blocked_in_a_row = self._errors_in_a_row = 0
+        if old != "browser":
+            self._close_session(old)
+        log.info("Amazon keeps stopping request style %r; using %r next", old, self.profile)
+
+    def _close_session(self, name: str) -> None:
+        session = self._sessions.pop(name, None)
+        if session is not None:
             try:
-                self._session.close()
+                session.close()
             except Exception:  # noqa: BLE001
                 pass
-        self._session = None
+
+    def close(self) -> None:
+        for name in list(self._sessions):
+            self._close_session(name)
+
+    # -- requests -----------------------------------------------------------
+    def _get_with(self, p: Profile, url: str) -> Page:
+        if self.budget is not None and not self.budget.acquire(self.wait):
+            raise Stopped("stopped while pacing requests")
+        session = self._sessions.get(p.name)
+        try:
+            if session is None:
+                session = self._sessions[p.name] = self._new_session(p)
+            resp = session.get(url, timeout=self.timeout, allow_redirects=True)
+        except Stopped:
+            raise
+        except Exception as exc:  # every transport raises its own exception types
+            self.stats[p.name]["errors"] += 1
+            raise FetchError(f"{type(exc).__name__}: {exc}") from exc
+        page = Page(url=str(resp.url), status_code=resp.status_code, text=resp.text, profile=p.name)
+        self.stats[p.name]["blocked" if page.blocked else "ok"] += 1
+        return page
 
     def get(self, url: str) -> Page:
-        if self.budget is not None and not self.budget.acquire(self.wait):
-            raise FetchError("stopped while pacing requests")
-        if self._session is None:
-            self._session = self._new_session()
+        self._apply_ranking()
+        self._switch_if_due()
+        p = self.current
         try:
-            resp = self._session.get(url, timeout=self.timeout, allow_redirects=True)
-        except Exception as exc:  # both backends raise their own exception types
-            raise FetchError(f"{type(exc).__name__}: {exc}") from exc
-        page = Page(url=str(resp.url), status_code=resp.status_code, text=resp.text)
-        if is_blocked(page.text, page.status_code):
-            self.stats[self.profile]["blocked"] += 1
-        else:
-            self.stats[self.profile]["ok"] += 1
+            page = self._get_with(p, url)
+        except Stopped:
+            raise
+        except FetchError:
+            self._errors_in_a_row += 1
+            if self._errors_in_a_row >= ERRORS_BEFORE_SWITCH:
+                self._switch_to = ""
+            self._close_session(p.name)  # e.g. a browser that crashed starts again
+            raise
+        self._errors_in_a_row = 0
+        if not page.blocked:
             self._blocked_in_a_row = 0
             if self.profile != self._remembered:
                 self._remember()
+            return page
+        self._blocked_in_a_row += 1
+        rescued = self._rescue(p, url)
+        if self._blocked_in_a_row >= BLOCKS_BEFORE_SWITCH:
+            # When the browser keeps getting the pages, go straight to it.
+            self._switch_to = "browser" if rescued is not None else ""
+        return rescued or page
+
+    def _rescue(self, failed: Profile, url: str) -> Page | None:
+        """The page through the browser, which runs Amazon's challenge itself
+        - so a bot check doesn't cost a check. None if that doesn't work."""
+        if not self.rescue or failed.name == "browser" or self.clock() < self._rescue_paused_until:
+            return None
+        log.info("Amazon showed a bot check to request style %r; reading the page with the browser", failed.name)
+        try:
+            page = self._get_with(self._usable["browser"], url)
+        except Stopped:
+            raise
+        except FetchError as exc:
+            self._close_session("browser")
+            pause = min(RESCUE_PAUSE_SECONDS * 2 ** self._rescue_failures, 1800.0)
+            self._rescue_failures += 1
+            self._rescue_paused_until = self.clock() + pause
+            log.warning("the browser could not read it either (%s); trying it again in %.0f min", exc, pause / 60)
+            return None
+        self._rescue_failures = 0
+        if page.blocked:
+            log.warning("the browser got a bot check too")
+            return None
         return page

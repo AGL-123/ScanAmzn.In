@@ -105,8 +105,8 @@ def test_fetcher_sends_a_current_consistent_chrome_identity(monkeypatch):
     calls = []
     monkeypatch.setattr(requests.Session, "request", lambda self, *a, **k: calls.append(a))
     f = fetcher_mod.Fetcher(backend="requests")
-    f.profile_index = fetcher_mod.PROFILES.index("client-hints")
-    session = f._new_session()
+    f.profile_index = f.profiles.index("client-hints")
+    session = f._new_session(f.current)
     assert calls == [] and session.headers["sec-ch-ua-mobile"] == "?0"
 
 
