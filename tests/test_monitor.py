@@ -907,3 +907,16 @@ def test_request_budget_follows_the_focused_interval(fetcher, dispatcher, clock)
         fetcher.set_product(asin, product_html("PlayStation card", available=False))
     m.run_cycle()
     assert m.extensive and fetcher.budget.per_minute == 8  # extensive mode keeps the safe limit
+
+
+def test_focused_budget_never_goes_above_the_cap(fetcher, dispatcher, clock):
+    from scanamzn.budget import RequestBudget
+    from scanamzn.monitor import FOCUS_BUDGET_CAP
+
+    fetcher.budget = RequestBudget(None, per_minute=8)
+    m = make_monitor(fetcher, dispatcher, clock,
+                     amazon={"focus_asins": [f"B0FOCUS00{i}" for i in range(6)]},
+                     monitor={"focus_interval_seconds": 10})
+    m.fetcher.budget = fetcher.budget
+    m._apply_budget()
+    assert fetcher.budget.per_minute == FOCUS_BUDGET_CAP == 13  # 6 cards stretch the interval instead

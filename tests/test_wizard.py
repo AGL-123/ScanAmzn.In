@@ -113,7 +113,8 @@ def test_data_estimate_scales_with_interval():
         return float(text.split("-")[1].split()[0])
 
     assert high(data_estimate(60, 0)) > high(data_estimate(300, 0))
-    assert high(data_estimate(60, 12)) > high(data_estimate(60, 0))
+    assert high(data_estimate(300, 12)) > high(data_estimate(300, 0))
+    assert high(data_estimate(30, 12)) == high(data_estimate(30, 30))  # the request budget caps it
 
 
 HAND_EDITED = """
@@ -189,7 +190,7 @@ def test_data_estimate_counts_given_asins():
     def high(text):
         return float(text.split("-")[1].split()[0])
 
-    assert high(data_estimate(60, 5)) > high(data_estimate(60, 0))
+    assert high(data_estimate(300, 5)) > high(data_estimate(300, 0))
 
 
 TOKEN = "123456789:AAH" + "x" * 32
@@ -336,3 +337,17 @@ def test_focused_interval_defaults_to_30_and_is_kept_on_rerun(tmp_path):
     run(path, ["", "", "", "", "", "", "", "15", "", "", ""])
     run(path, ["", "", "", "", "", "", "", "", "", "", ""])  # Enter keeps 15
     assert load(path, environ={}).focus_interval_seconds == 15
+
+
+def test_focused_warning_counts_requests_not_just_seconds(tmp_path):
+    from scanamzn.monitor import FOCUS_BUDGET_CAP
+    from scanamzn.setup_wizard import focused_rate
+
+    assert focused_rate(0, 10) == 12 and focused_rate(0, 30) == 4
+    assert focused_rate(4, 20) == FOCUS_BUDGET_CAP  # 6 cards every 20 s would be 18 a minute
+    path = tmp_path / "config.toml"
+    printed = []
+    run(path, ["Asia/Jerusalem", "me@gmail.com", "pw", "", "", "",
+               "B07K6RYVHR, B0B3DDW7TB, B07K6PVR8B, B0CYNZJLBC", "20", "60", "9", ""], out=printed.append)
+    text = "\n".join(printed)
+    assert "more bot checks" in text and f"at most {FOCUS_BUDGET_CAP} requests a minute" in text

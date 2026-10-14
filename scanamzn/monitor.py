@@ -24,6 +24,9 @@ from .parser import is_product_page, parse_product, parse_search
 log = logging.getLogger(__name__)
 
 HEARTBEAT_EVERY_SECONDS = 240
+# Most requests a minute focused mode may raise the budget to: what 2 cards
+# every 10 s need. More focused cards stretch the interval instead.
+FOCUS_BUDGET_CAP = 13
 CHANGED_PAGE_COOLDOWN_SECONDS = 3600  # between "page changed, may be in stock" alerts per item
 CONTROL_RETRY_SECONDS = 1800  # after an inconclusive or first failed in-stock check
 MAX_DEBUG_PAGES = 30
@@ -173,7 +176,7 @@ class Monitor:
         per_minute = self.s.max_requests_per_minute
         if not self.extensive:
             needed = math.ceil(len(self.s.focus_asins) * 60 / self.s.focus_interval_seconds) + 1
-            per_minute = max(per_minute, needed)
+            per_minute = max(per_minute, min(needed, FOCUS_BUDGET_CAP))
         budget.per_minute = per_minute
 
     def _extensive_now(self) -> bool:

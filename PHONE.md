@@ -316,13 +316,16 @@ warned if it fails twice in a row.
 ## Mobile data and battery
 
 Every check downloads the Amazon pages it watches, roughly 0.15-0.3 MB each.
-In the default focused mode (two cards every 30 s) that is about **0.7-1.4 GB
-a day** (every 10 s: about 2.5-5 GB); in the extensive mode (four cards plus two other values every ~60 s,
-searches every 3rd check) about **1-2.5 GB a day**. Use **Wi-Fi** if you can.
-On mobile data, tap **PS5 Data saver** rather than stopping the bot: it halves
-the checks (focused mode: the two cards every ~60 s, about 0.35-0.7 GB a day;
-extensive mode: only the four main cards and no searches, but every value as
-soon as any card comes back). Tap it again on Wi-Fi. Battery use
+In the default focused mode (two cards every 30 s) that is about **0.8-1.7 GB
+a day**; every 20 s about 1.3-2.5 GB, every 10 s about 2.5-5 GB. In the
+extensive mode (four cards plus two other values every ~60 s, searches every
+3rd check) it is about **1.4-3.4 GB a day**. **PS5 Settings** shows the
+estimate for your choices. Use **Wi-Fi** if you can. On mobile data, tap **PS5
+Data saver** rather than stopping the bot: it halves the checks (focused mode:
+the two cards at twice your interval - every ~60 s at the default 30 s, about
+0.4-0.8 GB a day; every ~20 s if you chose 10 s, about 1.3-2.5 GB; extensive
+mode: only the four main cards and no searches, but every value as soon as any
+card comes back). Tap it again on Wi-Fi. Battery use
 is modest, but keep the phone on the charger if you can.
 
 ## Troubleshooting

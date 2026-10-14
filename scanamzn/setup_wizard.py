@@ -105,19 +105,27 @@ def data_estimate(interval: int, asins: int, queries: int = 2, search_every: int
     # out-of-stock cards are hidden from search) and, every few rounds, the searches.
     in_turn = min(Settings.other_listings_per_round, len(MORE_LISTINGS))
     pages = asins + len(KNOWN_LISTINGS) + in_turn + queries / search_every
-    rounds_per_day = 86400 / (interval + 15)  # ~15 s of fetching per round
-    low = pages * rounds_per_day * 0.15 / 1024
-    high = (pages + max_discovered) * rounds_per_day * 0.3 / 1024
+    # A round starts every interval; the request budget caps the pages a day.
+    cap = Settings.max_requests_per_minute * 60 * 24
+    low = min(pages * 86400 / interval, cap) * 0.15 / 1024
+    high = min((pages + max_discovered) * 86400 / interval, cap) * 0.3 / 1024
     return f"Estimated data use: about {low:.1f}-{high:.1f} GB a day. Use Wi-Fi if you can."
+
+
+def focused_rate(asins: int, interval: float) -> float:
+    """Requests a minute in focused mode, as the monitor's request budget allows them."""
+    from .config import FOCUS_LISTINGS
+    from .monitor import FOCUS_BUDGET_CAP
+
+    return min((len(FOCUS_LISTINGS) + asins) * 60 / interval, FOCUS_BUDGET_CAP)
 
 
 def focused_estimate(asins: int, interval: float | None = None) -> str:
     """Rough daily data use in the default focused mode (a few pages, no searches)."""
-    from .config import FOCUS_LISTINGS, Settings
+    from .config import Settings
 
-    pages = len(FOCUS_LISTINGS) + asins
-    rounds_per_day = 86400 / (interval or Settings.focus_interval_seconds)  # a check starts every interval
-    return f"{pages * rounds_per_day * 0.15 / 1024:.1f}-{pages * rounds_per_day * 0.3 / 1024:.1f} GB a day"
+    pages_per_day = focused_rate(asins, interval or Settings.focus_interval_seconds) * 60 * 24
+    return f"{pages_per_day * 0.15 / 1024:.1f}-{pages_per_day * 0.3 / 1024:.1f} GB a day"
 
 
 class Wizard:
@@ -238,17 +246,23 @@ class Wizard:
             default=str(int(self._old("monitor", "focus_interval_seconds", default=30))),
             hint="10 seconds is the fastest.",
         )
-        if int(focus_interval) < 20:
-            out("   Note: checking this often, Amazon shows the bot more bot checks. It recovers by itself,")
-            out("   but no card is read meanwhile - PS5 Status shows how often that happens. Choose a")
-            out("   longer interval if you see many.")
+        from .config import FOCUS_LISTINGS
+
+        mine = len([a for a in asins.split(",") if a.strip()])
+        rate = focused_rate(mine, int(focus_interval))
+        if rate > 8:  # more than the steady pace that ran for hours without bot checks
+            out(f"   Note: that is about {rate:.0f} requests a minute to Amazon. Checking this often, Amazon")
+            out("   shows the bot more bot checks. It recovers by itself, but no card is read meanwhile -")
+            out("   PS5 Status shows how often that happens. Choose a longer interval if you see many.")
+        if (len(FOCUS_LISTINGS) + mine) * 60 / int(focus_interval) > rate:
+            out(f"   With {len(FOCUS_LISTINGS) + mine} cards, the bot spaces the checks to at most {rate:.0f}"
+                " requests a minute.")
         interval = self._prompt_until(
             "   In extensive mode, check every how many seconds (30 or more)",
             lambda a: a if a.isdigit() and int(a) >= 30 else None,
             default=str(int(self._old("monitor", "interval_seconds", default=60))),
         )
 
-        mine = len([a for a in asins.split(",") if a.strip()])
         out(f"   Estimated data use: focused mode about {focused_estimate(mine, int(focus_interval))};")
         out("   extensive mode: " + data_estimate(int(interval), mine).removeprefix("Estimated data use: "))
         out("   Every day the bot can send a short 'still running' message"
