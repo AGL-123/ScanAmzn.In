@@ -244,7 +244,8 @@ the most.
 **Focused and extensive mode**: by default the monitor watches only
 `[amazon] focus_asins` (`FOCUS_LISTINGS`, the Rs.4000 and Rs.2000 cards that
 come back most often, plus any `asins` you add) every
-`monitor.focus_interval_seconds` (default 30), with no searches and no other
+`monitor.focus_interval_seconds` (default 30, at least 10; asked by the setup
+wizard), with no searches and no other
 values. While a file `extensive` exists next to the status file (`ps5
 extensive` / the PS5 Extensive mode button), it watches everything described
 above every `monitor.interval_seconds`. It is read every round. An empty

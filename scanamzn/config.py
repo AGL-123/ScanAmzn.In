@@ -263,8 +263,8 @@ def from_dict(data: dict[str, Any]) -> Settings:
     s.http_backend = amazon.str("http_backend", s.http_backend)
     s.proxy = amazon.str("proxy", s.proxy)
     s.request_timeout = amazon.float("request_timeout", s.request_timeout)
-    if not s.asins and not s.search_queries:
-        raise ConfigError("nothing to watch: set amazon.asins and/or amazon.search_queries")
+    if not s.asins and not s.search_queries and not s.focus_asins:
+        raise ConfigError("nothing to watch: set amazon.asins, focus_asins and/or search_queries")
 
     mon = root.section("monitor")
     s.interval_seconds = mon.float("interval_seconds", s.interval_seconds)

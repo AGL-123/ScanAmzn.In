@@ -864,3 +864,46 @@ def test_extensive_mode_is_switched_on_by_the_widget_file(fetcher, dispatcher, c
 def test_no_focus_list_means_always_extensive(fetcher, dispatcher, clock):
     m = make_monitor(fetcher, dispatcher, clock, **watching())  # test settings: no known listings
     assert m.s.focus_asins == [] and m.extensive
+
+
+# --- focused interval: start-to-start timing and the request budget ----------------------
+
+
+def test_a_check_starts_every_interval_however_long_the_round_takes(fetcher, dispatcher, clock):
+    m = make_monitor(fetcher, dispatcher, clock,
+                     amazon={"focus_asins": ["B0FOCUS001", "B0FOCUS002"]},
+                     monitor={"focus_interval_seconds": 10, "jitter": 0})
+    starts = []
+    real_get = fetcher.get
+
+    def slow_get(url):  # each page takes 3 s to load
+        if url.endswith("B0FOCUS001"):
+            starts.append(clock())
+        clock.advance(3)
+        return real_get(url)
+
+    fetcher.get = slow_get
+    for asin in ("B0FOCUS001", "B0FOCUS002"):
+        fetcher.set_product(asin, product_html("Rs.2000 PlayStation card", available=False))
+    m._stop.wait = lambda t: clock.advance(t)
+    m.run_forever(max_runtime_seconds=60)
+    gaps = [b - a for a, b in zip(starts, starts[1:])]
+    assert gaps and all(abs(g - 10) < 0.01 for g in gaps)  # not 10 s + the 6 s the round took
+
+
+def test_request_budget_follows_the_focused_interval(fetcher, dispatcher, clock):
+    from scanamzn.budget import RequestBudget
+
+    fetcher.budget = RequestBudget(None, per_minute=8)
+    m = make_monitor(fetcher, dispatcher, clock,
+                     amazon={"focus_asins": ["B0FOCUS001", "B0FOCUS002"]},
+                     monitor={"focus_interval_seconds": 10})
+    m.fetcher.budget = fetcher.budget
+    m._apply_budget()
+    assert fetcher.budget.per_minute == 13  # 2 cards every 10 s = 12 a minute, + 1 for a retry
+    m.extensive_flag.parent.mkdir(parents=True, exist_ok=True)
+    m.extensive_flag.touch()
+    for asin in ("B0FOCUS001", "B0FOCUS002"):
+        fetcher.set_product(asin, product_html("PlayStation card", available=False))
+    m.run_cycle()
+    assert m.extensive and fetcher.budget.per_minute == 8  # extensive mode keeps the safe limit

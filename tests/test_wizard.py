@@ -37,7 +37,8 @@ def test_wizard_writes_working_config(tmp_path):
         "052-123-4567",                       # Israeli local mobile number
         "123456",                             # CallMeBot key
         "b0abcdefgh",                         # ASINs
-        "20", "60",                           # interval: too low, then ok
+        "5", "10",                            # focused interval: too low, then 10 s
+        "20", "60",                           # extensive interval: too low, then ok
         "",                                   # daily status hour: default 9
         "hc-ping.com/x", "https://hc-ping.com/abc",  # safety net URL: needs https://
     ], out=printed.append)
@@ -55,6 +56,8 @@ def test_wizard_writes_working_config(tmp_path):
 
     s = load(path, environ={})
     assert s.interval_seconds == 60 and s.daily_status_hour == 9
+    assert s.focus_interval_seconds == 10 and data["monitor"]["focus_interval_seconds"] == 10
+    assert any("more bot checks" in line for line in printed)  # warned: checking this often
     assert str(s.tz) == "Asia/Jerusalem"
     assert s.status_file.endswith(".scanamzn/status.json")
     assert [n.name.split("(")[0] for n in build_notifiers(s)] == ["email", "whatsapp/callmebot"]
@@ -62,9 +65,9 @@ def test_wizard_writes_working_config(tmp_path):
 
 def test_rerun_keeps_answers_and_can_drop_a_channel(tmp_path):
     path = tmp_path / "config.toml"
-    run(path, ["Asia/Jerusalem", "me@gmail.com", "pw", "", "", "+972521234567", "key", "", "60", "8", ""])
+    run(path, ["Asia/Jerusalem", "me@gmail.com", "pw", "", "", "+972521234567", "key", "", "", "60", "8", ""])
     # Enter keeps everything, "-" removes WhatsApp.
-    run(path, ["", "", "", "", "", "-", "", "", "", ""])
+    run(path, ["", "", "", "", "", "-", "", "", "", "", ""])
     data = tomllib.loads(path.read_text())
     assert data["email"]["password"] == "pw"
     assert data["monitor"]["daily_status_hour"] == 8
@@ -74,7 +77,7 @@ def test_rerun_keeps_answers_and_can_drop_a_channel(tmp_path):
 
 def test_quote_characters_in_secrets_round_trip(tmp_path):
     path = tmp_path / "config.toml"
-    run(path, ["Asia/Jerusalem", "me@gmail.com", 'p"w\\d', "", "", "", "", "60", "-1", ""])
+    run(path, ["Asia/Jerusalem", "me@gmail.com", 'p"w\\d', "", "", "", "", "", "60", "-1", ""])
     data = tomllib.loads(path.read_text())
     assert data["email"]["password"] == 'p"w\\d'
     assert data["monitor"]["daily_status_hour"] == -1
@@ -151,7 +154,7 @@ def test_rerun_keeps_settings_the_wizard_does_not_ask_about(tmp_path):
     path = tmp_path / "config.toml"
     path.write_text(HAND_EDITED)
     printed = []
-    run(path, ["", "", "", "", "", "", "", "", "", "", ""], out=printed.append)  # Enter everywhere
+    run(path, ["", "", "", "", "", "", "", "", "", "", "", ""], out=printed.append)  # Enter everywhere
     data = tomllib.loads(path.read_text())
     assert data["amazon"]["search_queries"] == ["a", "b", "c"]
     assert (data["monitor"]["search_every_cycles"], data["monitor"]["max_discovered"]) == (1, 15)
@@ -167,8 +170,8 @@ def test_rerun_keeps_settings_the_wizard_does_not_ask_about(tmp_path):
 
 def test_new_gmail_address_becomes_the_default_recipient(tmp_path):
     path = tmp_path / "config.toml"
-    run(path, ["Asia/Jerusalem", "old@gmail.com", "pw", "", "", "", "", "60", "9", ""])
-    asked = run(path, ["", "new@gmail.com", "pw2", "", "", "", "", "", "", ""])
+    run(path, ["Asia/Jerusalem", "old@gmail.com", "pw", "", "", "", "", "", "60", "9", ""])
+    asked = run(path, ["", "new@gmail.com", "pw2", "", "", "", "", "", "", "", ""])
     assert any("[new@gmail.com]" in q for q in asked)
     assert tomllib.loads(path.read_text())["email"]["to"] == ["new@gmail.com"]
 
@@ -221,7 +224,7 @@ def test_telegram_setup_finds_the_chat_after_start(tmp_path):
         "",                                   # "press Enter" after tapping START - not done yet
         "",                                   # check again
         "",                                   # "press Enter" after tapping START
-        "", "", "60", "9", "",                # no WhatsApp, ASINs, interval, hour, ping
+        "", "", "", "60", "9", "",            # no WhatsApp, ASINs, focused + extensive interval, hour, ping
     ], out=printed.append, telegram=tg)
     assert any("https://t.me/ps5_alerts_bot" in line for line in printed)
     data = tomllib.loads(path.read_text())
@@ -230,13 +233,13 @@ def test_telegram_setup_finds_the_chat_after_start(tmp_path):
     assert notifier.name == "telegram" and notifier.chat_id == "987654321"
 
     # Re-running with the same token keeps the chat without asking for START again.
-    run(path, ["", "", "", "", "", "", "", "", ""], telegram=FakeTelegram(started_after=99))
+    run(path, ["", "", "", "", "", "", "", "", "", ""], telegram=FakeTelegram(started_after=99))
     assert tomllib.loads(path.read_text())["telegram"]["chat_id"] == "987654321"
 
 
 def test_telegram_chat_id_can_be_typed_when_detection_fails(tmp_path):
     path = tmp_path / "config.toml"
-    run(path, ["Asia/Jerusalem", "", TOKEN, "", "55555", "", "", "60", "9", ""],
+    run(path, ["Asia/Jerusalem", "", TOKEN, "", "55555", "", "", "", "60", "9", ""],
         telegram=FakeTelegram(started_after=99))
     assert tomllib.loads(path.read_text())["telegram"]["chat_id"] == "55555"
 
@@ -272,7 +275,7 @@ def test_bad_token_asks_for_the_token_again(tmp_path):
     path, printed = tmp_path / "config.toml", []
     cut = TOKEN[:-3]  # still looks like a token, but Telegram says Unauthorized
     tg = ScriptedTelegram(get_me_errors=[_rejected("Unauthorized", 401)])
-    run(path, ["Asia/Jerusalem", "", cut, TOKEN, "", "", "", "60", "9", ""], out=printed.append, telegram=tg)
+    run(path, ["Asia/Jerusalem", "", cut, TOKEN, "", "", "", "", "60", "9", ""], out=printed.append, telegram=tg)
     assert any("token is not valid" in line for line in printed)
     assert tomllib.loads(path.read_text())["telegram"]["bot_token"] == TOKEN
 
@@ -280,7 +283,7 @@ def test_bad_token_asks_for_the_token_again(tmp_path):
 def test_bot_used_by_another_app_explains_what_to_do(tmp_path):
     path, printed = tmp_path / "config.toml", []
     tg = ScriptedTelegram(find_errors=[_rejected("Conflict: can't use getUpdates method while webhook is active", 409)])
-    run(path, ["Asia/Jerusalem", "", TOKEN, "", TOKEN, "", "", "", "60", "9", ""], out=printed.append, telegram=tg)
+    run(path, ["Asia/Jerusalem", "", TOKEN, "", TOKEN, "", "", "", "", "60", "9", ""], out=printed.append, telegram=tg)
     assert any("connected to another app" in line for line in printed)
     assert tomllib.loads(path.read_text())["telegram"]["chat_id"] == "987654321"
 
@@ -291,7 +294,7 @@ def test_unreachable_telegram_can_be_skipped_with_dash(tmp_path):
     path, printed = tmp_path / "config.toml", []
     down = TelegramUnreachable("telegram request failed: ConnectionError")
     tg = ScriptedTelegram(get_me_errors=[down], find_errors=[down], started_after=99)
-    run(path, ["Asia/Jerusalem", "me@gmail.com", "pw", "", TOKEN, "", "-", "", "", "60", "9", ""],
+    run(path, ["Asia/Jerusalem", "me@gmail.com", "pw", "", TOKEN, "", "-", "", "", "", "60", "9", ""],
         out=printed.append, telegram=tg)
     assert any("Could not reach Telegram" in line for line in printed)
     assert "telegram" not in tomllib.loads(path.read_text())
@@ -299,7 +302,7 @@ def test_unreachable_telegram_can_be_skipped_with_dash(tmp_path):
 
 def test_manual_chat_id_must_not_start_with_zero(tmp_path):
     path, printed = tmp_path / "config.toml", []
-    run(path, ["Asia/Jerusalem", "", TOKEN, "", "0521234567", "", "4242", "", "", "60", "9", ""],
+    run(path, ["Asia/Jerusalem", "", TOKEN, "", "0521234567", "", "4242", "", "", "", "60", "9", ""],
         out=printed.append, telegram=FakeTelegram(started_after=99))
     assert any("doesn't start with 0" in line for line in printed)
     assert tomllib.loads(path.read_text())["telegram"]["chat_id"] == "4242"
@@ -307,9 +310,9 @@ def test_manual_chat_id_must_not_start_with_zero(tmp_path):
 
 def test_pasting_the_same_token_links_the_chat_again(tmp_path):
     path = tmp_path / "config.toml"
-    run(path, ["Asia/Jerusalem", "", TOKEN, "", "1111", "", "", "60", "9", ""], telegram=FakeTelegram(99))
+    run(path, ["Asia/Jerusalem", "", TOKEN, "", "1111", "", "", "", "60", "9", ""], telegram=FakeTelegram(99))
     tg = ScriptedTelegram(started_after=0)
-    run(path, ["", "", TOKEN, "", "", "", "", "", ""], telegram=tg)
+    run(path, ["", "", TOKEN, "", "", "", "", "", "", ""], telegram=tg)
     assert tomllib.loads(path.read_text())["telegram"]["chat_id"] == "987654321"
     assert ("getUpdates", TOKEN) in tg.calls
 
@@ -320,6 +323,16 @@ def test_enter_keeps_a_placeholder_token(tmp_path):
         '[telegram]\nenabled = true\nbot_token = "${SCANAMZN_TELEGRAM_TOKEN}"\nchat_id = "987654321"\n'
     )
     tg = ScriptedTelegram()
-    run(path, ["Asia/Jerusalem", "", "", "", "", "60", "9", ""], telegram=tg)
+    run(path, ["Asia/Jerusalem", "", "", "", "", "", "60", "9", ""], telegram=tg)
     data = tomllib.loads(path.read_text())
     assert data["telegram"]["bot_token"] == "${SCANAMZN_TELEGRAM_TOKEN}" and tg.calls == []
+
+
+def test_focused_interval_defaults_to_30_and_is_kept_on_rerun(tmp_path):
+    path = tmp_path / "config.toml"
+    asked = run(path, ["Asia/Jerusalem", "me@gmail.com", "pw", "", "", "", "", "", "60", "9", ""])
+    assert any("In focused mode, check every how many seconds" in q and "[30]" in q for q in asked)
+    assert tomllib.loads(path.read_text())["monitor"]["focus_interval_seconds"] == 30
+    run(path, ["", "", "", "", "", "", "", "15", "", "", ""])
+    run(path, ["", "", "", "", "", "", "", "", "", "", ""])  # Enter keeps 15
+    assert load(path, environ={}).focus_interval_seconds == 15

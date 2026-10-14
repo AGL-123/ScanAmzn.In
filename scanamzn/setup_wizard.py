@@ -111,12 +111,12 @@ def data_estimate(interval: int, asins: int, queries: int = 2, search_every: int
     return f"Estimated data use: about {low:.1f}-{high:.1f} GB a day. Use Wi-Fi if you can."
 
 
-def focused_estimate(asins: int) -> str:
+def focused_estimate(asins: int, interval: float | None = None) -> str:
     """Rough daily data use in the default focused mode (a few pages, no searches)."""
     from .config import FOCUS_LISTINGS, Settings
 
     pages = len(FOCUS_LISTINGS) + asins
-    rounds_per_day = 86400 / (Settings.focus_interval_seconds + 5)
+    rounds_per_day = 86400 / (interval or Settings.focus_interval_seconds)  # a check starts every interval
     return f"{pages * rounds_per_day * 0.15 / 1024:.1f}-{pages * rounds_per_day * 0.3 / 1024:.1f} GB a day"
 
 
@@ -224,14 +224,24 @@ class Wizard:
             raise SystemExit("No alert channel configured - nothing saved. Run setup again.")
 
         out("\n5) WHAT TO WATCH")
-        out("   By default the bot watches the two cards that come back most often, Rs.4000 and Rs.2000,")
-        out("   every ~30 seconds (focused mode). The PS5 Extensive mode button switches to every value")
+        out("   By default the bot watches the two cards that come back most often, Rs.4000 and Rs.2000")
+        out("   (focused mode), as often as you choose below. The PS5 Extensive mode button switches to every value")
         out("   (Rs.500-12,000) plus searches, and back. Optionally add more product IDs to watch in both")
         out("   modes (ASINs, the 10 characters after /dp/ in an Amazon link), separated by commas.")
         asins = self._prompt_until(
             "   ASINs", self._check_asins, default=", ".join(self._old("amazon", "asins", default=[])),
             optional=True,
         )
+        focus_interval = self._prompt_until(
+            "   In focused mode, check every how many seconds (10 or more)",
+            lambda a: a if a.isdigit() and int(a) >= 10 else None,
+            default=str(int(self._old("monitor", "focus_interval_seconds", default=30))),
+            hint="10 seconds is the fastest.",
+        )
+        if int(focus_interval) < 20:
+            out("   Note: checking this often, Amazon shows the bot more bot checks. It recovers by itself,")
+            out("   but no card is read meanwhile - PS5 Status shows how often that happens. Choose a")
+            out("   longer interval if you see many.")
         interval = self._prompt_until(
             "   In extensive mode, check every how many seconds (30 or more)",
             lambda a: a if a.isdigit() and int(a) >= 30 else None,
@@ -239,7 +249,7 @@ class Wizard:
         )
 
         mine = len([a for a in asins.split(",") if a.strip()])
-        out(f"   Estimated data use: focused mode about {focused_estimate(mine)};")
+        out(f"   Estimated data use: focused mode about {focused_estimate(mine, int(focus_interval))};")
         out("   extensive mode: " + data_estimate(int(interval), mine).removeprefix("Estimated data use: "))
         out("   Every day the bot can send a short 'still running' message"
             " (by e-mail/Telegram when set up, to spare WhatsApp's small allowance).")
@@ -266,6 +276,7 @@ class Wizard:
             "heartbeat_url": heartbeat,
             "asins": [a.strip().upper() for a in asins.split(",") if a.strip()],
             "interval": int(interval),
+            "focus_interval": int(focus_interval),
             "timezone": zone,
             "daily_status_hour": int(daily),
         })
@@ -364,6 +375,7 @@ class Wizard:
 
         mon = data.setdefault("monitor", {})
         mon["interval_seconds"] = answers["interval"]
+        mon["focus_interval_seconds"] = answers["focus_interval"]
         mon.setdefault("search_every_cycles", 3)  # searches cost the most data
         mon.setdefault("max_discovered", 8)  # each listing is a page per round
         mon["timezone"] = answers["timezone"]

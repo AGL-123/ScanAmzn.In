@@ -139,6 +139,7 @@ class Monitor:
         self.extensive_flag = state_dir(settings) / "extensive"
         self.extensive = self._extensive_now()
         self._mode_logged = False
+        self._apply_budget()
         from .selftest import pause_file
 
         self.pause_flag = pause_file(settings)  # written by a running self-test
@@ -162,6 +163,18 @@ class Monitor:
         if not self.extensive:
             return list(self.s.focus_asins)
         return list(dict.fromkeys(self.s.asins + self.discovered))
+
+    def _apply_budget(self) -> None:
+        """The request budget follows the mode: in focused mode the interval the
+        user chose wins (its pages a minute, plus room for one retry)."""
+        budget = getattr(self.fetcher, "budget", None)
+        if budget is None or self.s.max_requests_per_minute <= 0:
+            return
+        per_minute = self.s.max_requests_per_minute
+        if not self.extensive:
+            needed = math.ceil(len(self.s.focus_asins) * 60 / self.s.focus_interval_seconds) + 1
+            per_minute = max(per_minute, needed)
+        budget.per_minute = per_minute
 
     def _extensive_now(self) -> bool:
         return not self.s.focus_asins or self.extensive_flag.exists()
@@ -200,6 +213,8 @@ class Monitor:
             self._maybe_control(report)
             self._maybe_daily_status()
             self._heartbeat()
+            if not report.blocked:  # "every N seconds" counts from the start of this round
+                wait = max(wait - (self.clock() - started), 1.0)
             self.write_status_file(next_check_in=wait)
             log.info(
                 "cycle %d: %d page(s) checked, %d in stock%s%s in %.1fs; next check in %.0fs",
@@ -275,6 +290,7 @@ class Monitor:
         extensive = self._extensive_now()
         if extensive != self.extensive:
             self.extensive = extensive
+            self._apply_budget()
             log.info("now in %s", self.mode_line())
 
         if self.extensive and self.saver:  # main cards; search finds only while in stock

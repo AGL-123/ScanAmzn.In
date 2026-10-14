@@ -52,7 +52,9 @@ search_every_cycles = 1
 # The built-in gift card values that are not checked every round: how many of
 # them to check per round, in turn (all of them right after any restock).
 other_listings_per_round = 2
-# Focused mode checks only a few cards, so it can check more often.
+# Focused mode checks only a few cards, so it can check more often (10 or
+# more). A check starts every N seconds in both modes. Below ~20 s Amazon shows
+# more bot checks; the request budget then follows this setting in focused mode.
 focus_interval_seconds = 30
 # Amazon answers bursts of requests with bot checks. At most this many requests
 # in any 60 seconds, shared by the monitor and the self-test. 0 = no limit.

@@ -204,9 +204,9 @@ an hour, healthchecks.io e-mails you, and you can tap **PS5 Start**.
 | **PS5 Stop** | Stops watching. It stays off, even after a reboot, until you tap Start. |
 | **PS5 Status** | Is it running, when it last checked, any problems, and the status of every listing it watches. |
 | **PS5 Test alert** | Sends a test message on every channel you set up. |
-| **PS5 Settings** | Asks the setup questions again. Press Enter to keep an answer, type `-` to remove a channel. Restarts the bot with the new settings. |
+| **PS5 Settings** | Asks the setup questions again, including how often to check in each mode (focused mode: every 10 seconds or more). Press Enter to keep an answer, type `-` to remove a channel. Restarts the bot with the new settings. |
 | **PS5 Check now** | Self-test against the real Amazon.in: shows what it finds and whether it would see a restock, and sends the result to Telegram/e-mail (see below). |
-| **PS5 Extensive mode** | Switches between the default **focused mode** (only the two cards that come back most often, Rs.4000 and Rs.2000, every ~30 s) and the **extensive mode** (every value from Rs.500 to Rs.12,000 plus Amazon searches, every ~60 s). Tap again to switch back. |
+| **PS5 Extensive mode** | Switches between the default **focused mode** (only the two cards that come back most often, Rs.4000 and Rs.2000, every 30 s unless you chose otherwise in PS5 Settings) and the **extensive mode** (every value from Rs.500 to Rs.12,000 plus Amazon searches, every ~60 s). Tap again to switch back. |
 | **PS5 Data saver** | On mobile data, tap this **instead of stopping the bot**: it checks fewer pages, half as often. Tap it again on Wi-Fi. |
 
 The same commands work typed in Termux: `ps5 start`, `ps5 stop`, `ps5 status`,
@@ -316,8 +316,8 @@ warned if it fails twice in a row.
 ## Mobile data and battery
 
 Every check downloads the Amazon pages it watches, roughly 0.15-0.3 MB each.
-In the default focused mode (two cards every ~30 s) that is about **0.7-1.4 GB
-a day**; in the extensive mode (four cards plus two other values every ~60 s,
+In the default focused mode (two cards every 30 s) that is about **0.7-1.4 GB
+a day** (every 10 s: about 2.5-5 GB); in the extensive mode (four cards plus two other values every ~60 s,
 searches every 3rd check) about **1-2.5 GB a day**. Use **Wi-Fi** if you can.
 On mobile data, tap **PS5 Data saver** rather than stopping the bot: it halves
 the checks (focused mode: the two cards every ~60 s, about 0.35-0.7 GB a day;
