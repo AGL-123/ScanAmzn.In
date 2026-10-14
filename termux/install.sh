@@ -81,10 +81,13 @@ Commands (type them in Termux):
 
 Home-screen buttons: long-press your home screen > Widgets > Termux
 (Termux:Widget), drag it out, and you get PS5 Start / Stop / Status /
-Test alert / Settings / Check now.
+Test alert / Settings / Check now / Test connection.
 
 IMPORTANT so Android does not stop the monitor: Settings > Apps > Termux >
 Battery > Unrestricted, and allow "Display over other apps". See PHONE.md.
+
+Recommended, on Wi-Fi: ps5 browser - adds a browser engine so that a bot
+check from Amazon doesn't cost a check (PHONE.md, Step 7).
 MSG
 
   local answer

@@ -230,9 +230,12 @@ def run(settings, fetcher: Fetcher, pause: Pause, dump: Dump, progress: Callable
         ))
         return test
     where = delivery_location(first.text) or "not shown"
+    style = getattr(first, "profile", "") or getattr(fetcher, "profile", "?")
+    how = "the browser engine" if style == "browser" else f"request style {style}"
+    rescued = style != getattr(fetcher, "profile", style)
     test.checks.append(Check(
         "Amazon.in reachable", True,
-        f"via {fetcher.backend} (request style {getattr(fetcher, 'profile', '?')});"
+        f"via {how}" + (" (Amazon showed a bot check, the browser engine got past it)" if rescued else "") + ";"
         f" Amazon's delivery location: {where}"
         + (f" (needed {site.blocks} retry after a bot check)" if site.blocks else ""),
     ))
