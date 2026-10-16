@@ -21,6 +21,7 @@ Termux: ``pkg install x11-repo && pkg install chromium`` (``ps5 browser``).
 
 from __future__ import annotations
 
+import collections
 import json
 import logging
 import os
@@ -45,8 +46,12 @@ log = logging.getLogger(__name__)
 SHELL_NAMES = ("headless_shell", "chrome-headless-shell")
 FULL_NAMES = ("chromium-browser", "chromium", "google-chrome", "google-chrome-stable", "chrome")
 BROWSER_NAMES = SHELL_NAMES + FULL_NAMES
-# How long a page may take, including Amazon's challenge (it usually takes 1-5 s).
-CHALLENGE_SECONDS = 30.0
+# How much longer than a plain page load Amazon's challenge may take (in a
+# browser it takes 1-5 s, plus the reload). If it doesn't finish, the page is
+# loaded once more with only pictures, fonts and styles held back, in case the
+# challenge needs something the strict filter refuses.
+CHALLENGE_SECONDS = 15.0
+_HEAVY = ("Image", "Media", "Font", "Stylesheet")
 START_SECONDS = 60.0
 
 # Runs in the child process just before Chromium: Chromium reads DevTools
@@ -232,6 +237,8 @@ class BrowserSession:
         self._session: str | None = None
         self._on_site = False  # a page of the site is open, so fetch() can read the others
         self.blocked_requests = 0
+        self.recently_blocked: collections.deque[str] = collections.deque(maxlen=8)
+        self.relaxed = False  # let everything but pictures, fonts and styles through
 
     # -- process ------------------------------------------------------------------
     def _args(self) -> list[str]:
@@ -342,12 +349,17 @@ class BrowserSession:
         kind = params.get("resourceType", "")
         host = (urlsplit(url).hostname or "").lower()
         ours = host == self.site or host.endswith("." + self.site)
-        allow = host.endswith(".awswaf.com") or (ours and kind in ("Document", "XHR", "Fetch"))
+        if self.relaxed:
+            allow = kind not in _HEAVY
+        else:
+            allow = host.endswith(".awswaf.com") or (ours and kind in ("Document", "XHR", "Fetch"))
         if allow:
             method, extra = "Fetch.continueRequest", {}
         else:
             method, extra = "Fetch.failRequest", {"errorReason": "BlockedByClient"}
             self.blocked_requests += 1
+            if kind not in _HEAVY:
+                self.recently_blocked.append(f"{kind} {host}")
         try:
             self._pipe.send(method, {"requestId": params.get("requestId"), **extra}, session)
         except (BrowserError, AttributeError):
@@ -390,6 +402,26 @@ class BrowserSession:
         """Open the page in the tab, as a visitor would. If Amazon answers with
         its challenge, the browser runs it and reloads by itself; wait for the
         real page (or a CAPTCHA, which is left alone)."""
+        outcome = self._load(url, timeout)
+        if outcome == "challenge" and not self.relaxed:
+            log.warning("browser: Amazon's browser check did not finish; loading the page again with fewer "
+                        "requests held back (held back: %s)", ", ".join(dict.fromkeys(self.recently_blocked)) or "-")
+            self.relaxed = True  # for as long as this browser runs
+            outcome = self._load(url, timeout)
+        if outcome == "challenge":
+            log.warning("browser: Amazon's browser check did not finish within %.0f s", timeout + CHALLENGE_SECONDS)
+        data = json.loads(self._evaluate(_DOCUMENT_JS, 20))
+        status = int(data.get("status") or 0)
+        # Judge by the page itself (the status can be the challenge's 202 even
+        # after the browser got past it, or 200 on Amazon's own CAPTCHA page).
+        if outcome == "page" and status in (0, 202, 405):
+            status = 200
+        elif outcome != "page":
+            status = 405 if outcome == "captcha" else 202
+        return Response(url=data.get("url") or url, status_code=status, text=data.get("text") or "")
+
+    def _load(self, url: str, timeout: float) -> str:
+        """Navigate and wait: "page", "captcha" or "challenge" (not finished in time)."""
         try:
             self._evaluate("window.__scanamznOld = 1", 10)
         except BrowserError:
@@ -398,7 +430,7 @@ class BrowserSession:
         if nav.get("errorText"):
             raise BrowserError(f"could not load the page ({nav['errorText']})")
         deadline = self.clock() + timeout + CHALLENGE_SECONDS
-        challenged = passed = captcha = False
+        challenged = False
         while True:
             try:
                 state = json.loads(self._evaluate(_STATE_JS, 10))
@@ -410,28 +442,17 @@ class BrowserSession:
             if state and not state["old"] and state["ready"] == "complete":
                 if state["captcha"]:
                     log.warning("browser: Amazon shows a CAPTCHA; the bot does not solve those")
-                    captcha = True
-                    break
+                    return "captcha"
                 if not state["challenge"]:
-                    self._on_site = passed = True
+                    self._on_site = True
                     if challenged:
                         log.info("browser: passed Amazon's browser check")
-                    break
+                    return "page"
                 challenged = True
             if self.clock() >= deadline:
-                log.warning("browser: Amazon's browser check did not finish within %.0f s", timeout + CHALLENGE_SECONDS)
-                break
+                return "challenge"
             if self.wait(0.4):  # the bot is stopping
                 raise BrowserError("stopped")
-        data = json.loads(self._evaluate(_DOCUMENT_JS, 20))
-        status = int(data.get("status") or 0)
-        # Judge by the page itself (the status can be the challenge's 202 even
-        # after the browser got past it, or 200 on Amazon's own CAPTCHA page).
-        if passed and status in (0, 202, 405):
-            status = 200
-        elif not passed:
-            status = 405 if captcha else 202
-        return Response(url=data.get("url") or url, status_code=status, text=data.get("text") or "")
 
 
 def _is_captcha(text: str) -> bool:

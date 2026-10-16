@@ -62,6 +62,19 @@ def test_browser_gets_past_the_challenge_again_when_its_token_expires(site, brow
 
 
 @needs_browser
+def test_a_challenge_needing_more_than_the_strict_filter_allows_gets_a_second_try(site, browser, monkeypatch):
+    from scanamzn import browser as browser_mod
+
+    monkeypatch.setattr(browser_mod, "CHALLENGE_SECONDS", 2.0)
+    site.script_challenge = True
+    page = browser.get(f"{site.base}/dp/B07K6RYVJ5", timeout=3)
+    assert page.status_code == 200 and 'id="productTitle"' in page.text
+    assert browser.relaxed and site.hits["/waf.js"] == 1  # refused at first, then let through
+    assert "Script 127.0.0.1" in browser.recently_blocked
+    assert not {"/img.jpg", "/s.css"} & set(site.hits)  # pictures and styles still held back
+
+
+@needs_browser
 def test_browser_hands_back_a_captcha_unsolved(site, browser):
     browser.get(f"{site.base}/dp/B07K6RYVJ5")
     site.captcha = True

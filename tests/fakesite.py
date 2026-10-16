@@ -20,6 +20,9 @@ CHALLENGE = (
     " location.reload(); }}, {delay});</script></head><body>Please wait</body></html>"
 )
 CAPTCHA = '<html><script>window.gokuProps = {}</script><script src="/captcha.js"></script></html>'
+# A challenge whose script comes from a path the strict filter refuses.
+SCRIPT_CHALLENGE = '<html><head><script>window.gokuProps = {key: 1};</script><script src="/waf.js"></script></head></html>'
+WAF_JS = "document.cookie = 'aws-waf-token=' + Date.now() + '; path=/'; location.reload();"
 
 
 class FakeAmazon:
@@ -27,6 +30,7 @@ class FakeAmazon:
         self.hits: collections.Counter[str] = collections.Counter()
         self.valid_after = 0.0  # tokens (ms timestamps) from before this are expired
         self.captcha = False  # answer every page with a CAPTCHA
+        self.script_challenge = False  # the challenge needs /waf.js
         site = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -35,18 +39,22 @@ class FakeAmazon:
 
             def do_GET(self):
                 site.hits[self.path] += 1
+                if self.path == "/waf.js":
+                    return self._send(200, WAF_JS, "application/javascript")
                 if not self.path.startswith("/dp/"):
                     return self._send(200, "x")
                 if site.captcha:
                     return self._send(405, CAPTCHA)
                 if not site._token_ok(self.headers.get("Cookie") or ""):
+                    if site.script_challenge:
+                        return self._send(202, SCRIPT_CHALLENGE)
                     return self._send(202, CHALLENGE.format(delay=challenge_delay_ms))
                 return self._send(200, PRODUCT.format(path=self.path))
 
-            def _send(self, code: int, body: str):
+            def _send(self, code: int, body: str, kind: str = "text/html; charset=utf-8"):
                 data = body.encode()
                 self.send_response(code)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Type", kind)
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
                 self.wfile.write(data)
