@@ -231,7 +231,8 @@ def run(settings, fetcher: Fetcher, pause: Pause, dump: Dump, progress: Callable
         return test
     where = delivery_location(first.text) or "not shown"
     style = getattr(first, "profile", "") or getattr(fetcher, "profile", "?")
-    how = "the browser engine" if style == "browser" else f"request style {style}"
+    browser = getattr(fetcher, "is_browser", lambda name: False)(style)
+    how = f"the browser engine ({style})" if browser else f"request style {style}"
     rescued = style != getattr(fetcher, "profile", style)
     test.checks.append(Check(
         "Amazon.in reachable", True,

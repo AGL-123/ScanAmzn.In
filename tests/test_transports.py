@@ -183,9 +183,18 @@ class _Session:
 
 @pytest.fixture
 def make(monkeypatch, tmp_path):
-    def build(answers, **kw):
+    """A fetcher whose sessions answer from a script. Sessions are named by
+    transport ("requests", "curl", "browser"), except the full-Chromium style
+    ("chromium"). two_browsers: the phone has both Chromium programs."""
+    from scanamzn.browser import FULL_NAMES
+
+    def build(answers, two_browsers=False, **kw):
         sent = []
-        monkeypatch.setattr(fetcher_mod, "find_browser", lambda path="": "/usr/bin/chromium-browser")
+        if two_browsers:
+            monkeypatch.setattr(fetcher_mod, "find_browser", lambda path="", names=None:
+                                "/usr/bin/chromium-browser" if names == FULL_NAMES else "/usr/bin/headless_shell")
+        else:
+            monkeypatch.setattr(fetcher_mod, "find_browser", lambda path="", names=None: "/usr/bin/headless_shell")
         monkeypatch.setattr(fetcher_mod.shutil, "which", lambda name: "/usr/bin/" + name)
         monkeypatch.setattr(fetcher_mod, "cffi_requests", None)
         f = fetcher_mod.Fetcher(profile_file=tmp_path / "request-profile",
@@ -193,7 +202,7 @@ def make(monkeypatch, tmp_path):
         sessions = []
 
         def new_session(profile):
-            s = _Session(profile.transport, answers, sent)
+            s = _Session("chromium" if profile.name == "chromium" else profile.transport, answers, sent)
             sessions.append(s)
             return s
 
@@ -291,3 +300,70 @@ def test_explicit_backend_limits_the_styles(make):
     assert f.profiles == ("browser",)
     f, _ = make(lambda t, url: 200, backend="requests")
     assert f.profiles == ("legacy", "plain", "client-hints") and not f.rescue
+
+
+# --- two browser styles: the light headless shell, then the full Chromium -------------------
+
+
+def test_both_browser_styles_are_offered_in_order(make):
+    f, _ = make(lambda t, url: 200, two_browsers=True)
+    assert f.profiles == ("legacy", "browser", "chromium", "curl", "plain", "client-hints")
+    assert f.browser_paths == {"browser": "/usr/bin/headless_shell", "chromium": "/usr/bin/chromium-browser"}
+    assert f.has_browser and f.is_browser("chromium") and not f.is_browser("curl")
+
+
+def test_full_chromium_reads_the_page_when_the_light_browser_fails(make):
+    answers = {"requests": 202, "browser": RuntimeError("headless_shell crashed"), "chromium": 200}
+    f, sent = make(lambda t, url: answers[t], two_browsers=True)
+    page = f.get("https://www.amazon.in/dp/B0X")
+    assert not page.blocked and page.profile == "chromium"
+    assert [t for t, _ in sent] == ["requests", "browser", "chromium"]
+    sent.clear()
+    f.get("https://www.amazon.in/dp/B0Y")  # the light browser is paused: straight to the full one
+    assert [t for t, _ in sent] == ["requests", "chromium"]
+    f.get("https://www.amazon.in/dp/B0Z")
+    assert f.profile == "chromium"  # two bot checks in a row, both read by it: it takes over
+    assert (f.profile_file.read_text().strip()) == "chromium"
+
+
+def test_light_browser_with_a_bot_check_is_rescued_by_the_full_one(make, tmp_path):
+    (tmp_path / "request-ranking").write_text("browser\nchromium\n")
+    answers = {"browser": 202, "chromium": 200}
+    f, sent = make(lambda t, url: answers.get(t, 202), two_browsers=True)
+    assert f.profile == "browser"
+    page = f.get("https://www.amazon.in/dp/B0X")
+    assert not page.blocked and page.profile == "chromium"
+    assert f.stats["browser"]["blocked"] == 1 and f.stats["chromium"]["ok"] == 1
+
+
+def test_switching_skips_a_browser_that_just_failed(make):
+    answers = {"requests": 202, "browser": RuntimeError("no memory"), "chromium": RuntimeError("no memory")}
+    f, sent = make(lambda t, url: answers.get(t, 202), two_browsers=True)
+    f.get("https://www.amazon.in/dp/B0X")
+    f.reset()
+    f.get("https://www.amazon.in/dp/B0X")
+    f.reset()
+    assert f.profile == "curl"  # both browsers failed a moment ago
+
+
+@needs_browser
+def test_both_real_chromium_builds_through_the_fetcher(site, tmp_path, monkeypatch):
+    shell = find_browser("/opt/pw-browsers/chromium_headless_shell-1194/chrome-linux/headless_shell")
+    full = find_browser("/opt/pw-browsers/chromium")
+    if not (shell and full):
+        pytest.skip("needs Playwright's headless shell and full Chromium")
+    from scanamzn.browser import FULL_NAMES
+
+    monkeypatch.setattr(fetcher_mod, "find_browser",
+                        lambda path="", names=None: full if names == FULL_NAMES else shell)
+    for name in ("browser", "chromium"):
+        f = fetcher_mod.Fetcher(site.base.removeprefix("http://"), browser_dir=tmp_path / "b", only=name,
+                                rescue=False)
+        monkeypatch.setattr(f, "product_url", lambda asin: f"{site.base}/dp/{asin}")
+        f.wait = lambda t: None
+        try:
+            page = f.get(f.product_url("B07K6RYVJ5"))
+            assert page.status_code == 200 and page.profile == name and 'id="productTitle"' in page.text
+            assert (tmp_path / "b" / name).is_dir() and (tmp_path / "b" / f"{name}.log").exists()
+        finally:
+            f.close()

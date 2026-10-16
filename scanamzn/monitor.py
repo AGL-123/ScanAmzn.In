@@ -880,7 +880,7 @@ class Monitor:
             "blocked_streak": self.block_streak,
             "request_profile": getattr(self.fetcher, "profile", None),
             "request_stats": getattr(self.fetcher, "stats", None),
-            "browser_ready": "browser" in getattr(self.fetcher, "profiles", ()) if self.s.http_backend == "auto" else None,
+            "browser_ready": getattr(self.fetcher, "has_browser", None) if self.s.http_backend == "auto" else None,
             "checks_failing": self.health_alerted,
             "last_problem": self.last_problem,
             "data_saver": self.saver,

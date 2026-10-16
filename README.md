@@ -44,7 +44,9 @@ Every ~45 seconds (randomised), the bot:
    a CAPTCHA. After two bot checks in a row the bot switches its *request style*
    (`fetcher.PROFILES`: "legacy" - desktop Chrome 140 with a first visit to the
    home page, the style that ran for hours on a phone without a block -
-   "browser", "curl" - the curl program over HTTP/2 - "plain", "client-hints",
+   "browser" (Chromium's light headless shell), "chromium" (the full Chromium,
+   which also reads a page the light one couldn't), "curl" - the curl program
+   over HTTP/2 - "plain", "client-hints",
    and "chrome-tls" when `curl_cffi` is installed); without a browser it retries
    after 60 s, 120 s, then every `monitor.max_backoff_seconds` (180 s). The style
    that works is remembered in `request-profile` next to the status file.

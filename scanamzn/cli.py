@@ -334,7 +334,7 @@ def cmd_probe(args: argparse.Namespace, s: Settings) -> int:
             signal.signal(getattr(signal, name), lambda signum, _frame: sys.exit(128 + signum))
     everything = Fetcher(s.domain, backend=s.http_backend, browser_path=s.browser_path)
     styles = list(args.style or everything.profiles)
-    browser_missing = everything.browser_path is None and s.http_backend == "auto"
+    browser_missing = not everything.has_browser and s.http_backend == "auto"
     asins = (s.focus_asins or s.asins)[:2]
     if not asins:
         print("No product pages are watched (only searches), so there is nothing to probe.")

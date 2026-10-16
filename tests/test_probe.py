@@ -44,7 +44,7 @@ def styles(monkeypatch):
     """Every style installed; each answers as the test says."""
     sent = []
     answers = {}
-    monkeypatch.setattr(fetcher_mod, "find_browser", lambda path="": "/usr/bin/chromium-browser")
+    monkeypatch.setattr(fetcher_mod, "find_browser", lambda path="", names=None: "/usr/bin/headless_shell")
     monkeypatch.setattr(fetcher_mod.shutil, "which", lambda name: "/usr/bin/" + name)
     monkeypatch.setattr(fetcher_mod, "cffi_requests", None)
     monkeypatch.setattr(fetcher_mod.Fetcher, "_new_session",

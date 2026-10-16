@@ -220,6 +220,9 @@ keeps asking, the bot reads every page through the browser until it stops.
   warns you as before.
 * It loads only Amazon's page itself and the test's script: no pictures, ads or
   other scripts, so data use stays the same.
+* The package has a light engine (used first) and the full Chromium (used
+  when the light one is stopped or won't start), so there is a second chance
+  built in.
 * It needs about 200-400 MB of memory while it runs. On **Android 14 or newer**,
   make sure Step 5.4 (*Disable child process restrictions*) is on: Android
   otherwise closes apps that start several processes, as a browser does.

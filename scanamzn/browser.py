@@ -37,13 +37,14 @@ from urllib.parse import urlsplit
 
 log = logging.getLogger(__name__)
 
-# Program names of Chromium builds, preferred first. Termux's chromium package
-# (x11-repo) has both headless_shell and chromium-browser; the headless shell
-# needs about half the memory and processes (Android 12+ kills apps whose
-# child processes exceed 32 across all apps), and it is what reports of
-# headless browsers getting past Amazon's challenge used.
-BROWSER_NAMES = ("headless_shell", "chrome-headless-shell", "chromium-browser", "chromium", "google-chrome",
-                 "google-chrome-stable", "chrome")
+# Program names of Chromium builds. Termux's chromium package (x11-repo) has
+# both: the headless shell needs about half the memory and processes of the
+# full browser (Android 12+ kills apps whose child processes exceed 32 across
+# all apps), and it is what reports of headless browsers getting past Amazon's
+# challenge used; the full Chromium is the second choice.
+SHELL_NAMES = ("headless_shell", "chrome-headless-shell")
+FULL_NAMES = ("chromium-browser", "chromium", "google-chrome", "google-chrome-stable", "chrome")
+BROWSER_NAMES = SHELL_NAMES + FULL_NAMES
 # How long a page may take, including Amazon's challenge (it usually takes 1-5 s).
 CHALLENGE_SECONDS = 30.0
 START_SECONDS = 60.0
@@ -92,13 +93,13 @@ class BrowserError(Exception):
     pass
 
 
-def find_browser(path: str = "") -> str | None:
-    """The Chromium program to use: the configured one, else the first known
-    name on PATH."""
+def find_browser(path: str = "", names: tuple[str, ...] = BROWSER_NAMES) -> str | None:
+    """The Chromium program to use: the configured one, else the first of
+    ``names`` on PATH."""
     if path:
         found = shutil.which(path) or (path if os.access(path, os.X_OK) else None)
         return found
-    for name in BROWSER_NAMES:
+    for name in names:
         found = shutil.which(name)
         if found:
             return found

@@ -195,8 +195,9 @@ export_files() {
   rm -f "$dest"/*
   [ -f "$STATE_DIR/selftest.txt" ] && cp "$STATE_DIR/selftest.txt" "$dest/" && n=$((n + 1))
   [ -f "$STATE_DIR/probe.txt" ] && cp "$STATE_DIR/probe.txt" "$dest/" && n=$((n + 1))
-  for f in "$STATE_DIR"/browser.log "$STATE_DIR"/browser-check.log; do
-    [ -f "$f" ] && tail -n 200 "$f" >"$dest/$(basename "$f" .log)-log.txt" && n=$((n + 1))
+  for f in "$STATE_DIR"/browser/*.log "$STATE_DIR"/browser-check/*.log; do
+    [ -f "$f" ] || continue
+    tail -n 200 "$f" >"$dest/$(basename "$(dirname "$f")")-$(basename "$f" .log)-log.txt" && n=$((n + 1))
   done
   [ -f "$LOG" ] && tail -n 400 "$LOG" >"$dest/monitor-log.txt" && n=$((n + 1))
   for f in "$STATE_DIR"/debug/*.html; do

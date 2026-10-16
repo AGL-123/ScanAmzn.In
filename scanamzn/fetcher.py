@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 from urllib.parse import quote_plus
 
-from .browser import BrowserSession, find_browser
+from .browser import FULL_NAMES, BrowserSession, find_browser
 from .curl import CurlSession
 from .parser import is_blocked
 
@@ -93,7 +93,8 @@ def chrome_headers(rotation: int, today: date | None = None) -> dict[str, str]:
 class Profile:
     name: str
     # "requests" (Python), "curl_cffi" (Chrome's TLS, after `ps5 boost`), "curl"
-    # (the curl program: HTTP/2 and its own TLS) or "browser" (a real Chromium).
+    # (the curl program: HTTP/2 and its own TLS) or "browser" (a real Chromium:
+    # "browser" prefers the light headless shell, "chromium" is the full one).
     transport: str = "requests"
     # "legacy": the Chrome 140 user agent that ran for hours; "current": today's Chrome.
     user_agent: str = "legacy"
@@ -108,7 +109,8 @@ PROFILES = (
     # On the user's home connection in October 2026 this one ran for 6 hours
     # (3-5 requests a minute) without a bot check after the first request.
     Profile("legacy", warm_up=True, about="desktop Chrome 140, home page first"),
-    Profile("browser", transport="browser", about="a real Chromium browser on the phone (ps5 browser)"),
+    Profile("browser", transport="browser", about="a real Chromium browser engine on the phone (ps5 browser)"),
+    Profile("chromium", transport="browser", about="the full Chromium browser, if the light one is stopped"),
     Profile("curl", transport="curl", warm_up=True, http2=True, about="the curl program over HTTP/2"),
     Profile("plain", user_agent="current", about="today's desktop Chrome"),
     Profile("client-hints", user_agent="current", hints=True, about="today's desktop Chrome with client hints"),
@@ -125,7 +127,7 @@ _LEGACY_USER_AGENTS = (
 )
 BLOCKS_BEFORE_SWITCH = 2  # the first request of a fresh session is often challenged anyway
 ERRORS_BEFORE_SWITCH = 3  # e.g. curl without HTTP/2, or a browser that keeps crashing
-# After the browser failed, it rescues pages again only after this (doubling, up to 30 min).
+# After a browser failed, it rescues pages again only after this (doubling, up to 30 min).
 RESCUE_PAUSE_SECONDS = 60.0
 
 _BROWSER_HEADERS = {
@@ -180,7 +182,16 @@ class Fetcher:
         if backend != "auto" and backend not in TRANSPORTS:
             raise FetchError(f"unknown http_backend {backend!r}")
         self.curl_path = shutil.which("curl")
-        self.browser_path = find_browser(browser_path)
+        # The browser styles' programs: the configured one (else the headless
+        # shell, else a full Chromium) and, if it's a different program, a full Chromium.
+        self.browser_paths: dict[str, str] = {}
+        first = find_browser(browser_path)
+        full = find_browser("", FULL_NAMES)
+        if first:
+            self.browser_paths["browser"] = first
+        if full and full != first:
+            self.browser_paths["chromium"] = full
+        self.browser_path = first
         self.browser_dir = Path(browser_dir) if browser_dir else Path(tempfile.gettempdir()) / "scanamzn-browser"
         usable = [p for p in PROFILES if (backend == "auto" or p.transport == backend) and self._installed(p)]
         if only is not None:
@@ -209,11 +220,12 @@ class Fetcher:
         self._blocked_in_a_row = 0
         self._errors_in_a_row = 0
         self._switch_to: str | None = None  # after the next reset() or before the next get()
-        # The browser reads a page the current style can't get past a bot
+        # A browser reads a page the current style can't get past a bot
         # check (it runs Amazon's challenge like any visitor's browser).
-        self.rescue = rescue and "browser" in self._usable
-        self._rescue_failures = 0
-        self._rescue_paused_until = 0.0
+        self.rescue = rescue and any(self._usable[n].transport == "browser" for n in self.profiles)
+        self._rescue_failures: dict[str, int] = {}
+        self._rescue_paused_until: dict[str, float] = {}
+        self._rescuer: str | None = None
         log.debug("request styles: %s; starting with %s", ", ".join(self.profiles), self.profile)
 
     def _installed(self, p: Profile) -> bool:
@@ -222,7 +234,7 @@ class Fetcher:
         if p.transport == "curl":
             return self.curl_path is not None
         if p.transport == "browser":
-            return self.browser_path is not None
+            return p.name in self.browser_paths
         return True
 
     @property
@@ -236,6 +248,20 @@ class Fetcher:
     @property
     def backend(self) -> str:
         return self.current.transport
+
+    @property
+    def has_browser(self) -> bool:
+        return bool(self._browsers())
+
+    def is_browser(self, name: str) -> bool:
+        return name in self._usable and self._usable[name].transport == "browser"
+
+    def _browsers(self) -> list[str]:
+        """The browser styles, in the current order."""
+        return [n for n in self.profiles if self._usable[n].transport == "browser"]
+
+    def _paused(self, name: str) -> bool:
+        return self.clock() < self._rescue_paused_until.get(name, 0.0)
 
     # -- remembered style and the connection test's ranking ---------------------
     def _read_profile(self) -> str | None:
@@ -305,8 +331,8 @@ class Fetcher:
             log.debug("new curl_cffi session impersonating %s", target)
         elif p.transport == "browser":
             session = BrowserSession(
-                self.browser_path or "chromium", self.domain, self.browser_dir, proxy=self.proxy,
-                log_path=self.browser_dir.with_name(self.browser_dir.name + ".log"), wait=self.wait,
+                self.browser_paths[p.name], self.domain, self.browser_dir / p.name, proxy=self.proxy,
+                log_path=self.browser_dir / f"{p.name}.log", wait=self.wait,
             )
         else:
             if p.transport == "curl":
@@ -353,13 +379,14 @@ class Fetcher:
             return
         old = self.profile
         if target == "" or target not in self.profiles:
-            self.profile_index = (self.profile_index + 1) % len(self.profiles)
-            if self.profile == "browser" and self.clock() < self._rescue_paused_until and len(self.profiles) > 2:
-                self.profile_index = (self.profile_index + 1) % len(self.profiles)  # it just failed
+            for _ in range(len(self.profiles) - 1):
+                self.profile_index = (self.profile_index + 1) % len(self.profiles)
+                if not (self.is_browser(self.profile) and self._paused(self.profile)):
+                    break  # (a browser that just failed is skipped)
         else:
             self.profile_index = self.profiles.index(target)
         self._blocked_in_a_row = self._errors_in_a_row = 0
-        if old != "browser":
+        if not self.is_browser(old):  # a browser stays open: it may read pages for the others
             self._close_session(old)
         log.info("request style %r keeps getting bot checks or failing; using %r next", old, self.profile)
 
@@ -417,28 +444,35 @@ class Fetcher:
         self._blocked_in_a_row += 1
         rescued = self._rescue(p, url)
         if self._blocked_in_a_row >= BLOCKS_BEFORE_SWITCH:
-            # When the browser keeps getting the pages, go straight to it.
-            self._switch_to = "browser" if rescued is not None else ""
+            # When a browser keeps getting the pages, go straight to it.
+            self._switch_to = self._rescuer if rescued is not None else ""
         return rescued or page
 
     def _rescue(self, failed: Profile, url: str) -> Page | None:
-        """The page through the browser, which runs Amazon's challenge itself
-        - so a bot check doesn't cost a check. None if that doesn't work."""
-        if not self.rescue or failed.name == "browser" or self.clock() < self._rescue_paused_until:
+        """The page through a browser, which runs Amazon's challenge itself -
+        so a bot check doesn't cost a check. The browser styles are tried in
+        order (the light one, then the full Chromium); None if none gets it."""
+        if not self.rescue:
             return None
-        log.info("Amazon showed a bot check to request style %r; reading the page with the browser", failed.name)
-        try:
-            page = self._get_with(self._usable["browser"], url)
-        except Stopped:
-            raise
-        except FetchError as exc:
-            pause = min(RESCUE_PAUSE_SECONDS * 2 ** self._rescue_failures, 1800.0)
-            self._rescue_failures += 1
-            self._rescue_paused_until = self.clock() + pause
-            log.warning("the browser could not read it either (%s); trying it again in %.0f min", exc, pause / 60)
-            return None
-        self._rescue_failures = 0
-        if page.blocked:
-            log.warning("the browser got a bot check too")
-            return None
-        return page
+        for name in self._browsers():
+            if name == failed.name or self._paused(name):
+                continue
+            log.info("Amazon showed a bot check to request style %r; reading the page with %r", failed.name, name)
+            try:
+                page = self._get_with(self._usable[name], url)
+            except Stopped:
+                raise
+            except FetchError as exc:
+                failures = self._rescue_failures.get(name, 0)
+                pause = min(RESCUE_PAUSE_SECONDS * 2 ** failures, 1800.0)
+                self._rescue_failures[name] = failures + 1
+                self._rescue_paused_until[name] = self.clock() + pause
+                log.warning("%r could not read it (%s); trying it again in %.0f min", name, exc, pause / 60)
+                continue
+            self._rescue_failures[name] = 0
+            if page.blocked:
+                log.warning("%r got a bot check too", name)
+                continue
+            self._rescuer = name
+            return page
+        return None
