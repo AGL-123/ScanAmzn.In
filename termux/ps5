@@ -256,7 +256,7 @@ browser() {
       if is_running; then stop; start; fi
       ;;
     *)
-      echo "Installing Chromium, a real browser engine (about 150 MB to download, 1 GB of space - use Wi-Fi)."
+      echo "Installing Chromium, a real browser engine (about 150-300 MB to download, 1 GB of space - use Wi-Fi)."
       echo "When Amazon asks for a bot check, the bot then reads the page with it, so no check is lost."
       if ! { pkg install -y x11-repo </dev/null && pkg install -y chromium </dev/null; }; then
         echo "Could not install Chromium (see above). Run 'pkg update' and try 'ps5 browser' again."

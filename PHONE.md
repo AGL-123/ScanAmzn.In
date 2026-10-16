@@ -209,7 +209,7 @@ ps5 browser
 ```
 
 It installs **Chromium** (the open-source engine of Chrome) from Termux's own
-repository: about 150 MB to download and 1 GB of space. The bot never shows a
+repository: about 150-300 MB to download and 1 GB of space. The bot never shows a
 window. From then on, when Amazon asks for a bot check, the bot loads that page
 with the browser engine at once: it runs Amazon's test like any visitor's
 browser, so the check succeeds within seconds instead of being lost. If Amazon
@@ -223,7 +223,7 @@ keeps asking, the bot reads every page through the browser until it stops.
 * The package has a light engine (used first) and the full Chromium (used
   when the light one is stopped or won't start), so there is a second chance
   built in.
-* It needs about 200-400 MB of memory while it runs. On **Android 14 or newer**,
+* It needs about 200-500 MB of memory while it runs. On **Android 14 or newer**,
   make sure Step 5.4 (*Disable child process restrictions*) is on: Android
   otherwise closes apps that start several processes, as a browser does.
 * When it's installed, `ps5 browser` runs **PS5 Test connection** (below) by
