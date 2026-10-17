@@ -69,9 +69,10 @@ def test_a_challenge_needing_more_than_the_strict_filter_allows_gets_a_second_tr
     site.script_challenge = True
     page = browser.get(f"{site.base}/dp/B07K6RYVJ5", timeout=3)
     assert page.status_code == 200 and 'id="productTitle"' in page.text
-    assert browser.relaxed and site.hits["/waf.js"] == 1  # refused at first, then let through
+    assert site.hits["/waf.js"] == 1  # refused at first, then let through
     assert "Script 127.0.0.1" in browser.recently_blocked
     assert not {"/img.jpg", "/s.css"} & set(site.hits)  # pictures and styles still held back
+    assert not browser._relaxed  # only for that one try
 
 
 @needs_browser
@@ -84,14 +85,103 @@ def test_browser_hands_back_a_captcha_unsolved(site, browser):
 
 
 @needs_browser
-def test_browser_restarts_after_it_was_killed(site, browser):
+def test_browser_killed_while_idle_restarts_within_the_same_check(site, browser):
     browser.get(f"{site.base}/dp/B07K6RYVJ5")
-    browser._pipe.proc.kill()
+    browser._pipe.proc.kill()  # e.g. Android's low-memory killer between rounds
     browser._pipe.proc.wait(5)
+    page = browser.get(f"{site.base}/dp/B093QF35KZ")  # notices it, starts a new one
+    assert page.status_code == 200 and "B093QF35KZ" in page.text
+
+
+def _renderers(profile):
+    """pids of the browser's page processes (renderers) for this profile."""
+    found = []
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        try:
+            cmd = Path(f"/proc/{entry}/cmdline").read_bytes()
+        except OSError:
+            continue
+        if b"--type=renderer" in cmd and str(profile).encode() in cmd:
+            found.append(int(entry))
+    return found
+
+
+@needs_browser
+def test_a_crashed_page_is_noticed_at_once_and_the_check_still_succeeds(site, browser, tmp_path):
+    import signal
+    import time
+
+    browser.get(f"{site.base}/dp/B07K6RYVJ5")
+    renderers = _renderers(tmp_path / "profile")
+    if not renderers:
+        pytest.skip("renderer runs inside the browser process here")
+    for pid in renderers:
+        os.kill(pid, signal.SIGKILL)
+    time.sleep(0.5)
+    started = time.monotonic()
+    page = browser.get(f"{site.base}/dp/B093QF35KZ")
+    assert page.status_code == 200 and time.monotonic() - started < 15  # not the 30 s evaluate timeout
+
+
+@needs_browser
+def test_a_network_blip_during_a_load_doesnt_leave_the_browser_stuck(site, browser):
+    browser.get(f"{site.base}/dp/B07K6RYVJ5")
+    site.expire_tokens()
+    site.drop_pages = 2  # fetch() and the navigation get no answer
     with pytest.raises(Exception):
         browser.get(f"{site.base}/dp/B093QF35KZ")
-    page = browser.get(f"{site.base}/dp/B093QF35KZ")  # starts a new one
-    assert page.status_code == 200
+    site.drop_pages = 0  # the network is back
+    page = browser.get(f"{site.base}/dp/B093QF35KZ")
+    assert page.status_code == 200 and "B093QF35KZ" in page.text
+
+
+@needs_browser
+def test_a_dropped_challenge_reload_is_an_error_not_an_empty_page(site, browser):
+    site.drop_token_reloads = 2  # Chrome itself retries a dropped request once
+    with pytest.raises(Exception, match="could not load the page"):
+        browser.get(f"{site.base}/dp/B07K6RYVJ5")
+    site.drop_token_reloads = 0  # the network is back
+    page = browser.get(f"{site.base}/dp/B07K6RYVJ5")
+    assert page.status_code == 200 and 'id="productTitle"' in page.text
+
+
+@needs_browser
+def test_when_amazon_keeps_refusing_the_browser_it_stops_after_one_retry(site, browser):
+    import time
+
+    site.accept_tokens = False
+    started = time.monotonic()
+    page = browser.get(f"{site.base}/dp/B07K6RYVJ5")
+    assert page.status_code == 202  # a bot check, whichever page the browser was left on
+    hits = site.hits["/dp/B07K6RYVJ5"]
+    assert 2 <= hits <= 3  # the page and its reloads, at most MAX_DOCUMENTS - not dozens
+    assert time.monotonic() - started < 15
+    time.sleep(1.5)  # the challenge page was left: nothing keeps reloading it
+    assert site.hits["/dp/B07K6RYVJ5"] == hits
+
+
+@needs_browser
+def test_a_challenge_served_with_200_is_run_too(site, browser):
+    browser.get(f"{site.base}/dp/B07K6RYVJ5")
+    site.expire_tokens()
+    site.challenge_status = 200
+    page = browser.get(f"{site.base}/dp/B093QF35KZ")
+    assert page.status_code == 200 and "B093QF35KZ" in page.text and "gokuProps" not in page.text
+
+
+@needs_browser
+def test_stopping_the_bot_ends_a_load_at_once(site, tmp_path):
+    from scanamzn.browser import BrowserStopped
+
+    site.accept_tokens = False
+    session = BrowserSession(BROWSER, "127.0.0.1", tmp_path / "p", wait=lambda t: True)  # stop requested
+    try:
+        with pytest.raises(BrowserStopped):
+            session.get(f"{site.base}/dp/B07K6RYVJ5")
+    finally:
+        session.close()
 
 
 @needs_browser
@@ -265,17 +355,24 @@ def test_rescue_failure_pauses_the_browser_for_a_while(make):
     assert sent[-2:] == [("curl", "https://www.amazon.in/dp/B0X"), ("browser", "https://www.amazon.in/dp/B0X")]
 
 
-def test_no_rescue_when_the_browser_also_gets_a_bot_check(make):
+def test_a_browser_that_gets_a_bot_check_too_is_closed_and_left_alone_for_a_while(make):
+    clock = [0.0]
     f, sent = make(lambda t, url: 202)
+    f.clock = lambda: clock[0]
     page = f.get("https://www.amazon.in/dp/B0X")
     assert page.blocked and page.profile == "legacy"
+    assert [t for t, _ in sent] == ["requests", "browser"]
+    assert "browser" not in f._sessions  # closed again: no idle Chromium
     f.reset()
-    f.get("https://www.amazon.in/dp/B0X")
-    f.reset()
-    assert f.profile == "browser"  # then the next style in order...
     sent.clear()
     f.get("https://www.amazon.in/dp/B0X")
-    assert sent == [("browser", "https://www.amazon.in/dp/B0X")]  # ...which can't rescue itself
+    assert [t for t, _ in sent] == ["requests"]  # resting: not tried again at once
+    f.reset()
+    assert f.profile == "curl"  # the switch skips it too
+    clock[0] += fetcher_mod.RESCUE_PAUSE_SECONDS + 1
+    sent.clear()
+    f.get("https://www.amazon.in/dp/B0X")
+    assert [t for t, _ in sent] == ["curl", "browser"]
 
 
 def test_transport_errors_switch_style_after_three(make):
@@ -380,3 +477,78 @@ def test_both_real_chromium_builds_through_the_fetcher(site, tmp_path, monkeypat
             assert (tmp_path / "b" / name).is_dir() and (tmp_path / "b" / f"{name}.log").exists()
         finally:
             f.close()
+
+
+def test_only_one_chromium_runs_when_switching_between_browsers(make):
+    answers = {"requests": 202, "browser": 202, "chromium": 200}
+    f, sent = make(lambda t, url: answers[t], two_browsers=True)
+    f.profile_index = f.profiles.index("browser")
+    f.get("https://www.amazon.in/dp/B0X")  # the light browser is challenged, the full one reads it
+    f.get("https://www.amazon.in/dp/B0Y")
+    f.get("https://www.amazon.in/dp/B0Z")
+    assert f.profile == "chromium"
+    assert set(f._sessions) == {"chromium"}  # the light one was closed, not left idle
+
+
+def test_network_outages_dont_change_the_request_style(make):
+    import requests
+
+    f, _ = make(lambda t, url: requests.ConnectionError("Network is unreachable"))
+    for _ in range(6):
+        with pytest.raises(fetcher_mod.FetchError):
+            f.get("https://www.amazon.in/dp/B0X")
+    assert f.profile == "legacy"  # every style would have failed the same way
+
+
+def test_the_best_ranked_style_is_tried_again_after_an_hour(make, tmp_path):
+    clock = [0.0]
+    answers = {"requests": 202, "browser": 200}
+    f, sent = make(lambda t, url: answers[t])
+    f.clock = lambda: clock[0]
+    for asin in ("B0X", "B0Y", "B0Z"):
+        f.get(f"https://www.amazon.in/dp/{asin}")
+    assert f.profile == "browser"
+    answers["requests"] = 200  # Amazon lets the light requests through again
+    clock[0] += fetcher_mod.RETRY_BEST_SECONDS + 1
+    sent.clear()
+    page = f.get("https://www.amazon.in/dp/B0X")
+    assert f.profile == "legacy" and page.profile == "legacy" and sent == [("requests", "https://www.amazon.in/dp/B0X")]
+    assert "browser" in f._sessions  # still there to read what Amazon blocks
+
+
+def test_stopping_during_a_bot_check_starts_no_browser(make):
+    f, sent = make(lambda t, url: 202)
+    f.wait = lambda t: True  # the bot is stopping
+    with pytest.raises(fetcher_mod.Stopped):
+        f.get("https://www.amazon.in/dp/B0X")
+    assert [t for t, _ in sent] == ["requests"]
+
+
+def test_after_a_captcha_the_second_browser_is_not_tried(make, monkeypatch):
+    answers = {"requests": 202, "browser": 405, "chromium": 200}
+    f, sent = make(lambda t, url: answers[t], two_browsers=True)
+    page = f.get("https://www.amazon.in/dp/B0X")
+    assert page.blocked and [t for t, _ in sent] == ["requests", "browser"]
+
+
+@needs_browser
+def test_browser_check_command(monkeypatch, tmp_path, capsys):
+    from scanamzn import cli
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SCANAMZN_SMTP_USER", "someone@gmail.com")
+    monkeypatch.setenv("SCANAMZN_SMTP_PASSWORD", "pw")
+    monkeypatch.setenv("SCANAMZN_TIMEZONE", "Asia/Jerusalem")
+    monkeypatch.setenv("SCANAMZN_STATUS_FILE", str(tmp_path / "state" / "status.json"))
+    monkeypatch.setenv("SCANAMZN_BROWSER_PATH", BROWSER)
+    assert cli.main(["browser-check"]) == 0
+    assert "✅ browser" in capsys.readouterr().out
+    broken = tmp_path / "headless_shell"
+    broken.write_text("#!/bin/sh\necho 'CANNOT LINK EXECUTABLE: libfoo.so not found' >&2\nexit 1\n")
+    broken.chmod(0o755)
+    monkeypatch.setenv("SCANAMZN_BROWSER_PATH", str(broken))
+    monkeypatch.setattr(fetcher_mod, "find_browser",
+                        lambda path="", names=None: str(broken) if path else None)
+    assert cli.main(["browser-check"]) == 1
+    out = capsys.readouterr().out
+    assert "❌ browser" in out and "libfoo.so not found" in out

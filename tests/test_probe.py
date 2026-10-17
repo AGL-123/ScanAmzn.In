@@ -130,3 +130,49 @@ def test_probe_with_some_styles_keeps_the_others_after_them(styles, monkeypatch,
     monkeypatch.setattr(cli, "build_notifiers", lambda s: [])
     assert cli.main(["probe", "--tries", "1", "--style", "curl"]) == 0
     assert (state / "request-ranking").read_text().split() == ["curl", "plain", "legacy", "browser", "client-hints"]
+
+
+def test_a_broken_browser_is_named_as_the_cause_not_amazon(styles):
+    answers, sent = styles
+    error = RuntimeError("the browser did not start: CANNOT LINK EXECUTABLE \"/data/data/com.termux/files/usr/lib/"
+                         "chromium/headless_shell\": cannot locate symbol \"foo\" referenced by libnss3.so (EOF)")
+    answers.update({"legacy": 202, "browser": error})
+    urls = [("B07K6RYVJ5", "https://www.amazon.in/dp/B07K6RYVJ5")]
+    results = probe.run(urls, ["legacy", "browser"], lambda n: fetcher_mod.Fetcher(only=n, rescue=False),
+                        wait=lambda t: None, progress=lambda text: None, spacing=5, tries=2, browsers={"browser"})
+    text = probe.summary(results, probe.rank(results), False, 2, 5, browser_missing=False, browsers={"browser"})
+    assert "cannot locate symbol" in text and "libnss3.so" in text  # the reason, not cut off
+    assert "did not work on this phone" in text and "ps5 export" in text
+    assert "Amazon may be checking" not in text
+
+
+def test_a_slow_failing_browser_is_not_tried_again(styles):
+    answers, sent = styles
+    answers["browser"] = 202
+    now = [0.0]
+
+    def clock():
+        now[0] += 20  # every call: each request seems to take 40 s
+        return now[0]
+
+    urls = [("B07K6RYVJ5", "https://www.amazon.in/dp/B07K6RYVJ5")]
+    results = probe.run(urls, ["browser"], lambda n: fetcher_mod.Fetcher(only=n, rescue=False),
+                        wait=lambda t: None, progress=lambda text: None, spacing=5, tries=4,
+                        clock=clock, slow=30, browsers={"browser"})
+    assert results[0].blocked == 4 and results[0].cut_short and len(sent) == 1
+    assert "stopped after a slow failure" in results[0].line()
+
+
+def test_duration_estimate_covers_slow_browsers():
+    typical, worst = probe.duration(6, 2, 4, 12.5, 20)
+    assert 4 * 60 < typical < 7 * 60 and worst > typical
+
+
+def test_refused_browser_gets_its_own_advice(styles):
+    answers, sent = styles
+    answers.update({name: 202 for name in fetcher_mod.PROFILE_NAMES})
+    urls = [("B07K6RYVJ5", "https://www.amazon.in/dp/B07K6RYVJ5")]
+    results = probe.run(urls, ["legacy", "browser"], lambda n: fetcher_mod.Fetcher(only=n, rescue=False),
+                        wait=lambda t: None, progress=lambda text: None, spacing=5, tries=1, browsers={"browser"})
+    text = probe.summary(results, probe.rank(results), False, 1, 5, browser_missing=False, browsers={"browser"})
+    assert "not even the browser engine" in text

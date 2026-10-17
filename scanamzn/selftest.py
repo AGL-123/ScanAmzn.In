@@ -38,6 +38,7 @@ BLOCK_RETRY_WAIT = 60  # seconds before retrying with a fresh session
 MAX_PAGES = 20  # gift card pages opened by the self-test
 OTHER_VALUES = 3  # of the values the monitor checks in turn, picked at random each run
 PAUSE_SECONDS = 600  # the monitor's pause during a self-test, at most
+MAX_PAUSE_SECONDS = 1200  # the longest pause a test may ask for (the connection test's worst case)
 SAVE_FIRST_PAGES = 3  # always saved; later ones only when not plainly "unavailable"
 
 # pause() sleeps between requests and returns True when the caller wants to stop.
@@ -223,10 +224,15 @@ def run(settings, fetcher: Fetcher, pause: Pause, dump: Dump, progress: Callable
         return test
     if is_blocked(first.text, first.status_code):
         dump("blocked_page", first.text)
+        if getattr(fetcher, "has_browser", False):
+            advice = ("even the browser engine got one, so Amazon wants more than a browser check right now. "
+                      "The monitor keeps trying by itself; checking less often (PS5 Settings) or another network "
+                      "helps. If it lasts, send `ps5 export`.")
+        else:
+            advice = "the monitor waits and retries by itself. If this happens often, add the browser engine: `ps5 browser`."
         test.checks.append(Check(
             "Amazon.in reachable", None,
-            f"Amazon keeps asking for a bot check (HTTP {first.status_code}); the monitor waits and retries "
-            "by itself. If this happens often, add the browser engine: `ps5 browser`.",
+            f"Amazon keeps asking for a bot check (HTTP {first.status_code}); {advice}",
         ))
         return test
     where = delivery_location(first.text) or "not shown"
@@ -419,11 +425,35 @@ def monitor_paused(settings, seconds: float = PAUSE_SECONDS):
         yield
     finally:
         try:
-            path.unlink(missing_ok=True)
+            # Only our own file: another test may have started meanwhile.
+            if fd is not None and os.stat(path).st_ino == os.fstat(fd).st_ino:
+                path.unlink(missing_ok=True)
         except OSError:
             pass
         if fd is not None:
             os.close(fd)
+
+
+class Busy(Exception):
+    """Another self-test or connection test is running."""
+
+
+@contextmanager
+def one_test_at_a_time(settings):
+    """The self-test and the connection test share a browser folder and the
+    monitor's pause: only one of them may run at a time."""
+    path = state_dir(settings) / "test.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        if fcntl is not None:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as exc:
+                raise Busy("a self-test or connection test is already running - wait for it to finish") from exc
+        yield
+    finally:
+        os.close(fd)
 
 
 def pause_holder_alive(fh) -> bool:

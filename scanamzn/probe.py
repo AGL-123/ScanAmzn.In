@@ -24,9 +24,19 @@ log = logging.getLogger(__name__)
 
 TRIES = 4  # per style, alternating between the watched cards
 MIN_SPACING_SECONDS = 5.0
-# At most: the whole test must fit in the monitor's pause (selftest.PAUSE_SECONDS).
+# At most, so the whole test fits in the monitor's pause (selftest.MAX_PAUSE_SECONDS).
 MAX_SPACING_SECONDS = 15.0
 BETWEEN_STYLES_SECONDS = 10.0
+BROWSER_START_SECONDS = 10.0  # a browser's first page on a phone: start-up plus Amazon's check
+
+
+def duration(styles: int, browsers: int, tries: int, spacing: float, timeout: float) -> tuple[float, float]:
+    """(typical, worst) seconds for the whole test. The worst case is a
+    browser that fails slowly: the test then stops trying it (``slow``)."""
+    waits = styles * (tries - 1) * spacing + max(styles - 1, 0) * BETWEEN_STYLES_SECONDS
+    typical = waits + styles * tries * 2 + browsers * BROWSER_START_SECONDS
+    worst = waits + styles * tries * timeout + browsers * (60 + 2 * (timeout + 15))
+    return typical, worst
 _ABOUT = {p.name: p.about for p in PROFILES}
 
 
@@ -41,6 +51,7 @@ class StyleResult:
     last_error: str = ""
     said: str = ""  # what the last understood page said
     unavailable: str = ""  # why the style couldn't be tried at all
+    cut_short: bool = False  # a slow failure: the remaining tries were not made
 
     @property
     def tries(self) -> int:
@@ -62,10 +73,17 @@ class StyleResult:
         if self.unclear:
             parts.append(f"{self.unclear} not understood")
         if self.errors:
-            parts.append(f"{self.errors} failed ({self.last_error[:80]})")
+            parts.append(f"{self.errors} failed ({_tail(self.last_error)})")
+        if self.cut_short:
+            parts.append("stopped after a slow failure")
         if self.seconds:
             parts.append(f"{statistics.median(self.seconds):.1f} s each")
         return f"{self.icon} {self.name}: {', '.join(parts)} - {about}"
+
+
+def _tail(text: str, limit: int = 160) -> str:
+    """The end of an error message: that's where the reason is."""
+    return text if len(text) <= limit else "…" + text[-limit:]
 
 
 def rank(results: list[StyleResult]) -> list[str]:
@@ -80,9 +98,13 @@ def rank(results: list[StyleResult]) -> list[str]:
 def run(urls: list[tuple[str, str]], styles: list[str], make_fetcher: Callable[[str], Fetcher],
         wait: Callable[[float], object], progress: Callable[[str], None], spacing: float,
         tries: int = TRIES, dump: Callable[[str, str], None] | None = None,
-        clock: Callable[[], float] = time.monotonic) -> list[StyleResult]:
+        clock: Callable[[], float] = time.monotonic, slow: float = 30.0,
+        browsers: set[str] | frozenset[str] = frozenset()) -> list[StyleResult]:
     """Try each style ``tries`` times on ``urls`` ((asin, url) pairs, used in
-    turn), ``spacing`` seconds apart."""
+    turn), ``spacing`` seconds apart. A browser style whose try fails after
+    more than ``slow`` seconds is not tried again: its remaining tries count
+    as the same failure (so a broken or refused browser can't make the test
+    outlast the monitor's pause)."""
     results: list[StyleResult] = []
     for n, name in enumerate(styles):
         result = StyleResult(name)
@@ -102,6 +124,7 @@ def run(urls: list[tuple[str, str]], styles: list[str], make_fetcher: Callable[[
                     wait(spacing)
                 asin, url = urls[i % len(urls)]
                 started = clock()
+                left = tries - i - 1
                 try:
                     page = fetcher.get(url)
                 except Stopped:
@@ -109,11 +132,19 @@ def run(urls: list[tuple[str, str]], styles: list[str], make_fetcher: Callable[[
                 except FetchError as exc:
                     result.errors += 1
                     result.last_error = str(exc)
+                    if name in browsers and clock() - started > slow and left:
+                        result.errors += left
+                        result.cut_short = True
+                        break
                     continue
                 result.seconds.append(clock() - started)
                 product = parse_product(page.text, asin, page.status_code)
                 if product.status is Status.BLOCKED:
                     result.blocked += 1
+                    if name in browsers and clock() - started > slow and left:
+                        result.blocked += left
+                        result.cut_short = True
+                        break
                 elif product.status is Status.UNKNOWN:
                     result.unclear += 1
                     if dump is not None:
@@ -128,7 +159,7 @@ def run(urls: list[tuple[str, str]], styles: list[str], make_fetcher: Callable[[
 
 
 def summary(results: list[StyleResult], ranking: list[str], adopted: bool, tries: int, spacing: float,
-            browser_missing: bool) -> str:
+            browser_missing: bool, browsers: set[str] | frozenset[str] = frozenset()) -> str:
     lines = [
         "PS5 gift card monitor - connection test",
         f"Which ways of asking get Amazon.in's pages on this network ({tries} tries each, "
@@ -139,10 +170,24 @@ def summary(results: list[StyleResult], ranking: list[str], adopted: bool, tries
     lines.append("")
     if adopted:
         lines.append(f"The bot now uses {ranking[0]} first, then: {', '.join(ranking[1:]) or 'nothing else'}.")
-    else:
-        lines.append("No way got through this time, so the bot keeps its previous order. "
-                     "Amazon may be checking this network harder right now: try again in an hour, "
-                     "or on another network (Wi-Fi / mobile data).")
+    broken = [r for r in results if r.name in browsers and not r.read and r.errors and not r.blocked]
+    refused = [r for r in results if r.name in browsers and not r.read and r.blocked]
+    if broken:
+        lines.append(f"The browser engine ({', '.join(r.name for r in broken)}) did not work on this phone: "
+                     f"{_tail(broken[0].last_error, 240)}")
+        lines.append("Run `ps5 browser` again (it re-checks the install). If that doesn't help, run "
+                     "`ps5 export` and send the files from Downloads/ScanAmzn.")
+    if not adopted:
+        if refused and not broken:
+            lines.append("No way got through, not even the browser engine: Amazon is asking this network for "
+                         "more than a browser check right now. The bot keeps trying by itself; checking less "
+                         "often (PS5 Settings) or another network (Wi-Fi / mobile data) helps.")
+        elif not broken:
+            lines.append("No way got through this time, so the bot keeps its previous order. "
+                         "Amazon may be checking this network harder right now: try again in an hour, "
+                         "or on another network (Wi-Fi / mobile data).")
+        else:
+            lines.append("So the bot keeps its previous order for now.")
     if browser_missing:
         lines.append("")
         lines.append("Tip: `ps5 browser` adds a real browser engine (about 1 GB of space). The bot then "

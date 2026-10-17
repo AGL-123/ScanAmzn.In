@@ -246,6 +246,20 @@ def test_health_alert_and_recovery(fetcher, dispatcher, clock):
     assert "again" in dispatcher.messages[1].subject
 
 
+def test_a_restart_while_checks_fail_still_sends_the_all_clear(fetcher, dispatcher, clock, tmp_path):
+    import json
+
+    status = tmp_path / "status.json"
+    status.write_text(json.dumps({"checks_failing": True, "last_problem": "captcha/robot check"}))
+    m = make_monitor(fetcher, dispatcher, clock, **watching(status_file=str(status)))
+    assert m.health_alerted and m.last_problem == "captcha/robot check"
+    fetcher.set_product(ASIN, product_html(TITLE, available=False))
+    m.run_cycle()
+    assert [x.subject for x in dispatcher.messages] == ["✅ ScanAmzn is checking Amazon.in again"]
+    status.write_text("not json")
+    assert not make_monitor(fetcher, dispatcher, clock, **watching(status_file=str(status))).health_alerted
+
+
 def test_debug_dump_of_unrecognised_page(fetcher, dispatcher, clock, tmp_path):
     m = make_monitor(fetcher, dispatcher, clock, **watching(debug_dump_dir=str(tmp_path)))
     fetcher.set_product(ASIN, '<span id="productTitle">x</span>')
@@ -790,14 +804,14 @@ def test_a_pause_file_nobody_holds_is_ignored(fetcher, dispatcher, clock):
 def test_a_pause_never_lasts_longer_than_the_limit(fetcher, dispatcher, clock):
     import os
 
-    from scanamzn.selftest import PAUSE_SECONDS
+    from scanamzn.selftest import MAX_PAUSE_SECONDS
 
     m = _paused_monitor(fetcher, dispatcher, clock)
     m._stop.wait = lambda t: clock.advance(t)
     fd = _hold_pause(m, clock() + 365 * 86400)  # a wrong clock, say
     start = clock()
     m.run_forever(max_runtime_seconds=1)
-    assert PAUSE_SECONDS <= clock() - start <= PAUSE_SECONDS + 10 and fetcher.requests
+    assert MAX_PAUSE_SECONDS <= clock() - start <= MAX_PAUSE_SECONDS + 10 and fetcher.requests
     os.close(fd)
 
 

@@ -129,6 +129,7 @@ class Monitor:
         self.last_success = clock()
         self.last_problem = ""
         self.health_alerted = False
+        self._carry_over_health()
         self._requests_in_cycle = 0
         self._dumped: set[str] = set()
         self._stop = threading.Event()
@@ -235,9 +236,9 @@ class Monitor:
     def _wait_while_paused(self) -> None:
         """`PS5 Check now` makes its own requests and asks the monitor to wait
         meanwhile. Only while that self-test is alive (it holds a lock on the
-        pause file) and for PAUSE_SECONDS at most, so a check that dies or a
+        pause file) and for MAX_PAUSE_SECONDS at most, so a check that dies or a
         wrong clock can't keep the monitor from watching."""
-        from .selftest import PAUSE_SECONDS, pause_holder_alive
+        from .selftest import MAX_PAUSE_SECONDS, pause_holder_alive
 
         paused_at = None
         while not self._stop.is_set():
@@ -256,8 +257,8 @@ class Monitor:
                 paused_at = self.clock()
                 log.info("paused while the self-test runs")
                 self.fetcher.close()  # e.g. its browser: the test starts its own
-                self.write_status_file(next_check_in=min(left, PAUSE_SECONDS))
-            elif self.clock() - paused_at >= PAUSE_SECONDS:
+                self.write_status_file(next_check_in=min(left, MAX_PAUSE_SECONDS))
+            elif self.clock() - paused_at >= MAX_PAUSE_SECONDS:
                 break
             self._stop.wait(min(left, 5.0))
         if paused_at is not None:
@@ -697,6 +698,19 @@ class Monitor:
         )
 
     # -- health ------------------------------------------------------------------
+    def _carry_over_health(self) -> None:
+        """A restart (ps5 update, ps5 browser) while checks were failing: the
+        user got the warning, so the first success sends the all-clear."""
+        if not self.s.status_file:
+            return
+        try:
+            data = json.loads(Path(self.s.status_file).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        if isinstance(data, dict) and data.get("checks_failing"):
+            self.health_alerted = True
+            self.last_problem = str(data.get("last_problem") or "")
+
     def _mark_success(self) -> None:
         self.last_success = self.clock()
         if self.health_alerted:

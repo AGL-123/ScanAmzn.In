@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 from urllib.parse import quote_plus
 
-from .browser import FULL_NAMES, BrowserSession, find_browser
+from .browser import FULL_NAMES, BrowserSession, BrowserStopped, find_browser
 from .curl import CurlSession
 from .parser import is_blocked
 
@@ -127,8 +127,17 @@ _LEGACY_USER_AGENTS = (
 )
 BLOCKS_BEFORE_SWITCH = 2  # the first request of a fresh session is often challenged anyway
 ERRORS_BEFORE_SWITCH = 3  # e.g. curl without HTTP/2, or a browser that keeps crashing
-# After a browser failed, it rescues pages again only after this (doubling, up to 30 min).
+# After a browser failed or got a bot check, it rescues pages again only after
+# this (doubling, up to 30 min).
 RESCUE_PAUSE_SECONDS = 60.0
+# On a style other than the best-ranked one, try the best one again after this
+# (Amazon's mood changes; a page it blocks is read by the browser anyway).
+RETRY_BEST_SECONDS = 3600.0
+# Failures that every way of asking would get (no network): not a reason to
+# change the request style.
+_NETWORK_ERRORS = ("Failed to fetch", "net::ERR_", "could not load the page", "did not load within",
+                   "ConnectionError", "ConnectTimeout", "ReadTimeout", "NameResolution", "Network is unreachable",
+                   "Temporary failure in name resolution", "curl exit 6:", "curl exit 7:", "curl exit 28:")
 
 _BROWSER_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
@@ -220,6 +229,7 @@ class Fetcher:
         self._blocked_in_a_row = 0
         self._errors_in_a_row = 0
         self._switch_to: str | None = None  # after the next reset() or before the next get()
+        self._switched_at = self.clock()
         # A browser reads a page the current style can't get past a bot
         # check (it runs Amazon's challenge like any visitor's browser).
         self.rescue = rescue and any(self._usable[n].transport == "browser" for n in self.profiles)
@@ -373,6 +383,18 @@ class Fetcher:
         self._close_session(self.profile)
         self._switch_if_due()
 
+    def _retry_best_if_due(self) -> None:
+        """After an hour on a fallback style, try the best-ranked one again."""
+        if self.profile_index == 0 or self._switch_to is not None:
+            return
+        if self.clock() - self._switched_at < RETRY_BEST_SECONDS:
+            return
+        best = self.profiles[0]
+        if self.is_browser(best) and self._paused(best):
+            return
+        log.info("trying the best-ranked request style %r again", best)
+        self._switch_to = best
+
     def _switch_if_due(self) -> None:
         target, self._switch_to = self._switch_to, None
         if target is None or len(self.profiles) < 2:
@@ -386,9 +408,15 @@ class Fetcher:
         else:
             self.profile_index = self.profiles.index(target)
         self._blocked_in_a_row = self._errors_in_a_row = 0
-        if not self.is_browser(old):  # a browser stays open: it may read pages for the others
+        self._switched_at = self.clock()
+        # A browser stays open while a light style is used (it reads the pages
+        # Amazon blocks), but only one browser runs at a time.
+        if not self.is_browser(old) or self.is_browser(self.profile):
             self._close_session(old)
-        log.info("request style %r keeps getting bot checks or failing; using %r next", old, self.profile)
+        if target and target == self.profiles[0] and self.profile_index == 0:
+            log.info("using request style %r", self.profile)
+        else:
+            log.info("request style %r keeps getting bot checks or failing; using %r next", old, self.profile)
 
     def _close_session(self, name: str) -> None:
         session = self._sessions.pop(name, None)
@@ -413,6 +441,8 @@ class Fetcher:
             resp = session.get(url, timeout=self.timeout, allow_redirects=True)
         except Stopped:
             raise
+        except BrowserStopped as exc:
+            raise Stopped("stopped") from exc
         except Exception as exc:  # every transport raises its own exception types
             self.stats[p.name]["errors"] += 1
             raise FetchError(f"{type(exc).__name__}: {exc}") from exc
@@ -422,14 +452,16 @@ class Fetcher:
 
     def get(self, url: str) -> Page:
         self._apply_ranking()
+        self._retry_best_if_due()
         self._switch_if_due()
         p = self.current
         try:
             page = self._get_with(p, url)
         except Stopped:
             raise
-        except FetchError:
-            self._errors_in_a_row += 1
+        except FetchError as exc:
+            if not any(marker in str(exc) for marker in _NETWORK_ERRORS):  # no network: all styles fail
+                self._errors_in_a_row += 1
             if self._errors_in_a_row >= ERRORS_BEFORE_SWITCH:
                 self._switch_to = ""
             if p.transport != "browser":  # the browser restarts itself when it crashed or hung
@@ -457,22 +489,33 @@ class Fetcher:
         for name in self._browsers():
             if name == failed.name or self._paused(name):
                 continue
+            if self.wait(0):  # the bot is stopping: don't start a browser now
+                raise Stopped("stopped")
             log.info("Amazon showed a bot check to request style %r; reading the page with %r", failed.name, name)
             try:
                 page = self._get_with(self._usable[name], url)
             except Stopped:
                 raise
             except FetchError as exc:
-                failures = self._rescue_failures.get(name, 0)
-                pause = min(RESCUE_PAUSE_SECONDS * 2 ** failures, 1800.0)
-                self._rescue_failures[name] = failures + 1
-                self._rescue_paused_until[name] = self.clock() + pause
-                log.warning("%r could not read it (%s); trying it again in %.0f min", name, exc, pause / 60)
+                self._rest(name, f"could not read it ({exc})")
+                continue
+            if page.blocked:
+                self._rest(name, "got a bot check too")
+                if page.status_code == 405 or "captcha" in page.text[:50000].lower():
+                    break  # a CAPTCHA: the other browser would only get one too
                 continue
             self._rescue_failures[name] = 0
-            if page.blocked:
-                log.warning("%r got a bot check too", name)
-                continue
             self._rescuer = name
             return page
         return None
+
+    def _rest(self, name: str, why: str) -> None:
+        """A browser that failed or got a bot check: closed, and left alone for
+        a while (1, 2, 4 ... 30 min) - also when switching styles."""
+        failures = self._rescue_failures.get(name, 0)
+        pause = min(RESCUE_PAUSE_SECONDS * 2 ** failures, 1800.0)
+        self._rescue_failures[name] = failures + 1
+        self._rescue_paused_until[name] = self.clock() + pause
+        if name != self.profile:
+            self._close_session(name)
+        log.warning("%r %s; trying it again in %.0f min", name, why, pause / 60)

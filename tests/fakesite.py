@@ -31,6 +31,10 @@ class FakeAmazon:
         self.valid_after = 0.0  # tokens (ms timestamps) from before this are expired
         self.captcha = False  # answer every page with a CAPTCHA
         self.script_challenge = False  # the challenge needs /waf.js
+        self.challenge_status = 202  # Amazon's challenge has also been seen with 200
+        self.accept_tokens = True  # False: every token is refused (the browser is challenged again and again)
+        self.drop_pages = 0  # drop this many /dp/ requests (no answer: a network blip)
+        self.drop_token_reloads = 0  # drop this many /dp/ requests that carry a token (the challenge's reload)
         site = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -43,12 +47,20 @@ class FakeAmazon:
                     return self._send(200, WAF_JS, "application/javascript")
                 if not self.path.startswith("/dp/"):
                     return self._send(200, "x")
+                cookie = self.headers.get("Cookie") or ""
+                if site.drop_pages or (site.drop_token_reloads and "aws-waf-token=" in cookie):
+                    if site.drop_pages:
+                        site.drop_pages -= 1
+                    else:
+                        site.drop_token_reloads -= 1
+                    self.close_connection = True
+                    return None  # no answer at all
                 if site.captcha:
                     return self._send(405, CAPTCHA)
-                if not site._token_ok(self.headers.get("Cookie") or ""):
+                if not (site.accept_tokens and site._token_ok(cookie)):
                     if site.script_challenge:
-                        return self._send(202, SCRIPT_CHALLENGE)
-                    return self._send(202, CHALLENGE.format(delay=challenge_delay_ms))
+                        return self._send(site.challenge_status, SCRIPT_CHALLENGE)
+                    return self._send(site.challenge_status, CHALLENGE.format(delay=challenge_delay_ms))
                 return self._send(200, PRODUCT.format(path=self.path))
 
             def _send(self, code: int, body: str, kind: str = "text/html; charset=utf-8"):

@@ -395,3 +395,38 @@ def test_selftest_in_focused_mode_opens_the_focused_cards_and_skips_searches(fet
     assert opened[:2] == ["B0PSN05000", "B0PSN02000"]  # focused cards (+ the user's own)
     assert fetcher.search_url("playstation gift card") not in fetcher.requests
     assert test.verdict == "pass"
+
+
+def test_only_one_test_runs_at_a_time(tmp_path):
+    import pytest as _pytest
+
+    settings = make_settings(amazon={"asins": ["B07K6RYVJ5"]}, monitor={"status_file": str(tmp_path / "status.json")})
+    with selftest.one_test_at_a_time(settings):
+        with _pytest.raises(selftest.Busy):
+            with selftest.one_test_at_a_time(settings):
+                pass
+    with selftest.one_test_at_a_time(settings):  # free again
+        pass
+
+
+def test_a_finished_test_does_not_unpause_the_monitor_for_another_one(tmp_path):
+    settings = make_settings(amazon={"asins": ["B07K6RYVJ5"]}, monitor={"status_file": str(tmp_path / "status.json")})
+    path = selftest.pause_file(settings)
+    with selftest.monitor_paused(settings):
+        first = path.stat().st_ino
+        with selftest.monitor_paused(settings, seconds=900):  # e.g. a second test started meanwhile
+            assert path.stat().st_ino != first
+        assert not path.exists()  # the inner one removed its own file
+    with selftest.monitor_paused(settings):
+        outer_inode = path.stat().st_ino
+    assert not path.exists()
+    # The outer one ends while a newer pause is in place: the newer one stays.
+    import contextlib
+
+    stack = contextlib.ExitStack()
+    stack.enter_context(selftest.monitor_paused(settings))
+    with selftest.monitor_paused(settings):
+        newer = path.stat().st_ino
+        stack.close()
+        assert path.exists() and path.stat().st_ino == newer
+    assert outer_inode  # (used)

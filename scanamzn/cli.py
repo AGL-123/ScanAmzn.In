@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 import logging.handlers
+import math
 import random
 import re
 import signal
@@ -149,7 +150,7 @@ def cmd_run(args: argparse.Namespace, s: Settings) -> int:
 
 def cmd_once(args: argparse.Namespace, s: Settings) -> int:
     dispatcher = Dispatcher(build_notifiers(s) if args.notify else [], dry_run=not args.notify)
-    fetcher = _fetcher(s)
+    fetcher = _fetcher(s, browser_dir="browser-cli")  # not the running monitor's browser
     monitor = Monitor(s, fetcher, dispatcher)
     try:
         report = monitor.run_cycle()
@@ -170,7 +171,7 @@ def cmd_once(args: argparse.Namespace, s: Settings) -> int:
 
 
 def cmd_discover(args: argparse.Namespace, s: Settings) -> int:
-    fetcher = _fetcher(s)
+    fetcher = _fetcher(s, browser_dir="browser-cli")
     matched: dict[str, str] = {}
     try:
         for query in s.search_queries:
@@ -268,12 +269,15 @@ def cmd_selftest(args: argparse.Namespace, s: Settings) -> int:
     fetcher = _fetcher(s, browser_dir="browser-check")
     fetcher.wait = pace
     try:
-        with selftest.monitor_paused(s):  # a running monitor waits meanwhile
+        with selftest.one_test_at_a_time(s), selftest.monitor_paused(s):  # a running monitor waits meanwhile
             result = selftest.run(
                 s, fetcher, pause=pause, dump=dump,
                 progress=lambda text: print(text, flush=True),
                 wait=time.sleep,
             )
+    except selftest.Busy as exc:
+        print(f"Not now: {exc}.")
+        return 4
     finally:
         fetcher.close()
     text = result.summary()
@@ -343,13 +347,20 @@ def cmd_probe(args: argparse.Namespace, s: Settings) -> int:
     # The monitor's own pace: its interval spread over the cards it watches.
     interval = s.focus_interval_seconds if s.focus_asins else s.interval_seconds
     spacing = args.spacing or min(max(interval / len(asins), probe.MIN_SPACING_SECONDS), probe.MAX_SPACING_SECONDS)
-    print(f"Testing {len(styles)} request styles, {args.tries} pages each, {spacing:.0f} s apart "
-          f"(about {len(styles) * (args.tries * spacing + probe.BETWEEN_STYLES_SECONDS) / 60:.0f} min)."
+    browsers = sum(everything.is_browser(name) for name in styles)
+    typical, worst = probe.duration(len(styles), browsers, args.tries, spacing, s.request_timeout)
+    print(f"Testing {len(styles)} request styles, {args.tries} pages each, {spacing:.0f} s apart: "
+          f"about {math.ceil(typical / 60)} min (up to {math.ceil(worst / 60)} if Amazon is slow)."
           " The monitor waits meanwhile.", flush=True)
-    with selftest.monitor_paused(s):
-        results = probe.run(urls, styles, make_fetcher, wait=time.sleep,
-                            progress=lambda text: print(text, flush=True),
-                            spacing=spacing, tries=args.tries, dump=dump)
+    try:
+        with selftest.one_test_at_a_time(s), selftest.monitor_paused(s, seconds=min(worst, selftest.MAX_PAUSE_SECONDS)):
+            results = probe.run(urls, styles, make_fetcher, wait=time.sleep,
+                                progress=lambda text: print(text, flush=True),
+                                spacing=spacing, tries=args.tries, dump=dump,
+                                slow=s.request_timeout + 10, browsers={n for n in styles if everything.is_browser(n)})
+    except selftest.Busy as exc:
+        print(f"Not now: {exc}.")
+        return 4
     ranking = probe.rank(results)
     best = next((r for r in results if r.name == ranking[0]), None)
     adopted = best is not None and best.read > 0
@@ -363,7 +374,8 @@ def cmd_probe(args: argparse.Namespace, s: Settings) -> int:
         except OSError as exc:
             log.error("could not save the result: %s", exc)
             adopted = False
-    text = probe.summary(results, ranking, adopted, args.tries, spacing, browser_missing)
+    text = probe.summary(results, ranking, adopted, args.tries, spacing, browser_missing,
+                         browsers={n for n in styles if everything.is_browser(n)})
     print("\n" + text)
     try:
         (folder / "probe.txt").write_text(text + "\n", encoding="utf-8")
@@ -373,6 +385,35 @@ def cmd_probe(args: argparse.Namespace, s: Settings) -> int:
         icon = "✅" if adopted and best.read == best.tries else ("⚠️" if adopted else "❌")
         _send_report(s, f"{icon} PS5 monitor connection test", text, "PS5 monitor connection test")
     return 0 if adopted else 3
+
+
+def cmd_browser_check(args: argparse.Namespace, s: Settings) -> int:
+    """Start each Chromium program the bot would use, the way it uses them
+    (after `ps5 browser` installs them): does it run on this phone?"""
+    import tempfile
+
+    from .browser import BrowserError, BrowserSession
+
+    found = Fetcher(s.domain, backend="auto", browser_path=s.browser_path).browser_paths
+    if not found:
+        print("❌ No Chromium program found (headless_shell or chromium-browser).")
+        return 1
+    working = 0
+    for name, path in found.items():
+        with tempfile.TemporaryDirectory(prefix="scanamzn-check-") as folder:
+            session = BrowserSession(path, s.domain, Path(folder) / "profile", log_path=Path(folder) / "log")
+            try:
+                session._start()
+                if session._evaluate("6 * 7", 20) != 42:
+                    raise BrowserError("it started but does not run pages")
+            except BrowserError as exc:
+                print(f"❌ {name} ({path}) does not work on this device: {exc}")
+            else:
+                print(f"✅ {name} ({path}) works")
+                working += 1
+            finally:
+                session.close()
+    return 0 if working else 1
 
 
 def cmd_status(args: argparse.Namespace, s: Settings) -> int:
@@ -454,6 +495,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--tries", type=int, default=4, help="pages per style (default 4)")
     p.add_argument("--spacing", type=float, help="seconds between pages (default: the monitor's pace)")
     p.add_argument("--style", action="append", help="test only this style (repeatable)")
+    sub.add_parser("browser-check", help="check that the installed Chromium programs start (after ps5 browser)")
     sub.add_parser("setup", help="answer a few questions to create the config file")
     p = sub.add_parser("parse", help="parse a saved Amazon page (for debugging)")
     p.add_argument("file")
@@ -480,6 +522,7 @@ def main(argv: list[str] | None = None) -> int:
             "status": cmd_status,
             "selftest": cmd_selftest,
             "probe": cmd_probe,
+            "browser-check": cmd_browser_check,
         }
         return commands[args.command](args, settings)
     except (ConfigError, FetchError) as exc:

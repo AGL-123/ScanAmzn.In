@@ -47,10 +47,16 @@ SHELL_NAMES = ("headless_shell", "chrome-headless-shell")
 FULL_NAMES = ("chromium-browser", "chromium", "google-chrome", "google-chrome-stable", "chrome")
 BROWSER_NAMES = SHELL_NAMES + FULL_NAMES
 # How much longer than a plain page load Amazon's challenge may take (in a
-# browser it takes 1-5 s, plus the reload). If it doesn't finish, the page is
-# loaded once more with only pictures, fonts and styles held back, in case the
-# challenge needs something the strict filter refuses.
+# browser it takes 1-5 s, plus the reload). If it got stuck while the strict
+# filter held back something it might need, the page is loaded once more with
+# a relaxed filter.
 CHALLENGE_SECONDS = 15.0
+# A challenge whose reload comes back as a challenge again means Amazon didn't
+# accept the browser's answer: stop there rather than reload over and over.
+# Hard limit, whatever the page's script does: so many page loads per try
+# (the page, the challenge's reload, and one retry Chrome itself may make).
+MAX_CHALLENGES = 2
+MAX_DOCUMENTS = 3
 _HEAVY = ("Image", "Media", "Font", "Stylesheet")
 START_SECONDS = 60.0
 
@@ -73,6 +79,8 @@ _LAUNCHER = (
 # navigation started), Amazon's challenge, or a CAPTCHA the bot won't solve.
 _STATE_JS = """JSON.stringify({
   ready: document.readyState,
+  scheme: location.protocol,
+  host: location.hostname,
   old: !!window.__scanamznOld,
   challenge: !!window.gokuProps,
   captcha: !!(window.AwsWafCaptcha || document.querySelector(
@@ -96,6 +104,10 @@ _FETCH_JS = """(async () => {
 
 class BrowserError(Exception):
     pass
+
+
+class BrowserStopped(BrowserError):
+    """The bot is stopping."""
 
 
 def find_browser(path: str = "", names: tuple[str, ...] = BROWSER_NAMES) -> str | None:
@@ -140,6 +152,7 @@ class _Pipe:
         self.proc, self.out_fd, self.in_fd = proc, out_fd, in_fd
         self.handlers: dict[str, Callable[[dict, str | None], None]] = {}
         self.closed = False
+        self.closed_reason = ""
         self._buf = bytearray()
         self._scanned = 0
         self._next_id = 0
@@ -169,6 +182,8 @@ class _Pipe:
         try:
             deadline = time.monotonic() + timeout
             while msg_id not in self._results:
+                if self.closed:  # e.g. the page crashed while we waited
+                    raise BrowserError(self.closed_reason or "the browser has quit")
                 left = deadline - time.monotonic()
                 if left <= 0:
                     self.closed = True  # hung: start a new one rather than wait on it again
@@ -224,7 +239,7 @@ class BrowserSession:
 
     def __init__(self, binary: str, domain: str, user_data_dir: str | Path, proxy: str | None = None,
                  log_path: str | Path | None = None, wait: Callable[[float], Any] = time.sleep,
-                 clock: Callable[[], float] = time.monotonic):
+                 clock: Callable[[], float] = time.monotonic, pace: Callable[[], bool] | None = None):
         self.binary, self.domain = binary, domain
         self.site = (urlsplit("//" + domain).hostname or domain).removeprefix("www.")
         self.user_data_dir = Path(user_data_dir)
@@ -233,12 +248,18 @@ class BrowserSession:
         self.headers: dict[str, str] = {}  # the browser sends its own
         self.cookies = _Cookies()
         self.wait, self.clock = wait, clock
+        # Called before a load the caller didn't ask for (the relaxed second
+        # try), so it counts against the request budget; False: stop.
+        self.pace = pace
         self._pipe: _Pipe | None = None
         self._session: str | None = None
         self._on_site = False  # a page of the site is open, so fetch() can read the others
         self.blocked_requests = 0
         self.recently_blocked: collections.deque[str] = collections.deque(maxlen=8)
-        self.relaxed = False  # let everything but pictures, fonts and styles through
+        self._relaxed = False  # during the second try only: a wider filter
+        self._main_frame: str | None = None
+        self._doc_limit: int | None = None  # while loading: page loads still allowed
+        self._docs_refused = False
 
     # -- process ------------------------------------------------------------------
     def _args(self) -> list[str]:
@@ -293,11 +314,16 @@ class BrowserSession:
         os.close(from_chrome_w)
         pipe = self._pipe = _Pipe(proc, to_chrome_w, from_chrome_r)
         pipe.handlers["Fetch.requestPaused"] = self._on_request
+        pipe.handlers["Inspector.targetCrashed"] = self._on_crash
+        pipe.handlers["Target.detachedFromTarget"] = self._on_detached
         try:
             target = pipe.call("Target.createTarget", {"url": "about:blank"}, timeout=START_SECONDS)
             self._session = pipe.call("Target.attachToTarget", {"targetId": target["targetId"], "flatten": True})[
                 "sessionId"]
             pipe.call("Page.enable", session=self._session)
+            self._main_frame = pipe.call("Page.getFrameTree", session=self._session)["frameTree"]["frame"]["id"]
+            # Tells at once when Android kills the page's process (its renderer).
+            pipe.call("Inspector.enable", session=self._session)
             # Every request passes _on_request first.
             pipe.call("Fetch.enable", {"patterns": [{"urlPattern": "*", "requestStage": "Request"}]},
                       session=self._session)
@@ -305,17 +331,28 @@ class BrowserSession:
                 pipe.call("Storage.setCookies", {"cookies": self.cookies.items})
         except BrowserError as exc:
             self.close()
-            raise BrowserError(f"the browser did not start: {exc}{self._log_tail()}") from exc
+            last = self._last_words()
+            # Its own last words first: they say why (e.g. a missing library).
+            raise BrowserError(f"the browser did not start: {last} ({exc})" if last
+                               else f"the browser did not start ({exc})") from exc
         log.info("browser started (%s, pid %d)", Path(self.binary).name, proc.pid)
 
-    def _log_tail(self) -> str:
+    def _last_words(self) -> str:
         if self.log_path is None:
             return ""
         try:
             lines = [ln for ln in self.log_path.read_text(errors="replace").splitlines() if ln.strip()]
         except OSError:
             return ""
-        return f" - its last words: {lines[-1][:200]}" if lines else ""
+        return lines[-1][:200] if lines else ""
+
+    def _on_crash(self, params: dict, session: str | None) -> None:
+        if self._pipe is not None and session == self._session:
+            self._pipe.closed, self._pipe.closed_reason = True, "the browser's page crashed (killed by Android?)"
+
+    def _on_detached(self, params: dict, session: str | None) -> None:
+        if self._pipe is not None and params.get("sessionId") == self._session:
+            self._pipe.closed, self._pipe.closed_reason = True, "the browser's page was closed"
 
     def close(self) -> None:
         pipe, self._pipe = self._pipe, None
@@ -349,10 +386,19 @@ class BrowserSession:
         kind = params.get("resourceType", "")
         host = (urlsplit(url).hostname or "").lower()
         ours = host == self.site or host.endswith("." + self.site)
-        if self.relaxed:
-            allow = kind not in _HEAVY
+        if kind == "Document" and params.get("frameId") == self._main_frame and self._doc_limit is not None:
+            self._doc_limit -= 1
+            if self._doc_limit < 0:  # the challenge keeps reloading: Amazon refuses the browser
+                self._docs_refused = True
+                ours = False
+        if self._docs_refused and kind == "Document" and params.get("frameId") == self._main_frame:
+            allow = False
+        elif host.endswith(".awswaf.com") or (ours and kind in ("Document", "XHR", "Fetch")):
+            allow = True
+        elif self._relaxed:  # anything but heavy files and other sites' pages (ads)
+            allow = kind not in _HEAVY and (kind != "Document" or ours)
         else:
-            allow = host.endswith(".awswaf.com") or (ours and kind in ("Document", "XHR", "Fetch"))
+            allow = False
         if allow:
             method, extra = "Fetch.continueRequest", {}
         else:
@@ -377,21 +423,44 @@ class BrowserSession:
             raise BrowserError(text.splitlines()[0])
         return (result.get("result") or {}).get("value")
 
-    def get(self, url: str, timeout: float = 20.0, allow_redirects: bool = True) -> Response:
+    def _alive(self) -> bool:
+        """Notice a browser (or page) that died while idle: read what's pending."""
         if self._pipe is None or self._pipe.closed:
-            self.close()
-            self._start()
+            return False
         try:
-            if self._on_site:
-                page = self._fetch(url, timeout)
-                if page.status_code not in (202, 405) or _is_captcha(page.text):
-                    return page
-                log.info("browser: Amazon sent its browser check; loading the page so the browser runs it")
-            return self._navigate(url, timeout)
+            self._pipe._read(0)
         except BrowserError:
-            if self._pipe is not None and self._pipe.closed:
+            pass
+        return not self._pipe.closed
+
+    def get(self, url: str, timeout: float = 20.0, allow_redirects: bool = True) -> Response:
+        for attempt in (1, 2):
+            if not self._alive():
                 self.close()
-            raise
+                self._start()
+            try:
+                return self._get(url, timeout)
+            except BrowserStopped:
+                raise
+            except BrowserError as exc:
+                # Load the next page in the tab rather than fetch() from what
+                # may now be an error page.
+                self._on_site = False
+                died = self._pipe is None or self._pipe.closed
+                if died:
+                    self.close()
+                if not died or attempt == 2:
+                    raise
+                log.info("browser: %s; starting it again", exc)
+        raise AssertionError("unreachable")
+
+    def _get(self, url: str, timeout: float) -> Response:
+        if self._on_site:
+            page = self._fetch(url, timeout)
+            if not _needs_challenge(page):
+                return page
+            log.info("browser: Amazon sent its browser check; loading the page so the browser runs it")
+        return self._navigate(url, timeout)
 
     def _fetch(self, url: str, timeout: float) -> Response:
         value = self._evaluate(_FETCH_JS % (int(timeout * 1000), json.dumps(url)), timeout + 10, await_promise=True)
@@ -402,15 +471,20 @@ class BrowserSession:
         """Open the page in the tab, as a visitor would. If Amazon answers with
         its challenge, the browser runs it and reloads by itself; wait for the
         real page (or a CAPTCHA, which is left alone)."""
+        self.recently_blocked.clear()
         outcome = self._load(url, timeout)
-        if outcome == "challenge" and not self.relaxed:
-            log.warning("browser: Amazon's browser check did not finish; loading the page again with fewer "
-                        "requests held back (held back: %s)", ", ".join(dict.fromkeys(self.recently_blocked)) or "-")
-            self.relaxed = True  # for as long as this browser runs
-            outcome = self._load(url, timeout)
-        if outcome == "challenge":
-            log.warning("browser: Amazon's browser check did not finish within %.0f s", timeout + CHALLENGE_SECONDS)
+        if outcome == "stuck" and self.recently_blocked:
+            log.warning("browser: Amazon's browser check got stuck; loading the page once more with fewer "
+                        "requests held back (held back: %s)", ", ".join(dict.fromkeys(self.recently_blocked)))
+            if self.pace is not None and not self.pace():
+                raise BrowserStopped("stopped")
+            outcome = self._load(url, timeout, relaxed=True)
+        if outcome in ("stuck", "challenge"):
+            log.warning("browser: Amazon's browser check did not let the browser through (%s)",
+                        "it asked again" if outcome == "challenge" else "it did not finish")
         data = json.loads(self._evaluate(_DOCUMENT_JS, 20))
+        if outcome != "page":
+            self._leave()
         status = int(data.get("status") or 0)
         # Judge by the page itself (the status can be the challenge's 202 even
         # after the browser got past it, or 200 on Amazon's own CAPTCHA page).
@@ -420,39 +494,80 @@ class BrowserSession:
             status = 405 if outcome == "captcha" else 202
         return Response(url=data.get("url") or url, status_code=status, text=data.get("text") or "")
 
-    def _load(self, url: str, timeout: float) -> str:
-        """Navigate and wait: "page", "captcha" or "challenge" (not finished in time)."""
+    def _leave(self) -> None:
+        """Off Amazon's challenge page, so its script can't keep reloading it."""
+        self._on_site = False
+        try:
+            self._pipe.call("Page.navigate", {"url": "about:blank"}, session=self._session, timeout=10)
+        except BrowserError as exc:
+            log.debug("browser: could not leave the page (%s)", exc)
+
+    def _load(self, url: str, timeout: float, relaxed: bool = False) -> str:
+        """Navigate and wait: "page", "captcha", "challenge" (it came back as a
+        challenge again) or "stuck" (a challenge that didn't reload in time)."""
+        self._on_site = False
         try:
             self._evaluate("window.__scanamznOld = 1", 10)
         except BrowserError:
-            pass  # e.g. a page that's still loading; the readyState check covers it
-        nav = self._pipe.call("Page.navigate", {"url": url}, session=self._session, timeout=timeout + 10)
-        if nav.get("errorText"):
-            raise BrowserError(f"could not load the page ({nav['errorText']})")
-        deadline = self.clock() + timeout + CHALLENGE_SECONDS
-        challenged = False
-        while True:
-            try:
-                state = json.loads(self._evaluate(_STATE_JS, 10))
-            except BrowserError as exc:  # the page is being replaced right now
-                if self._pipe is None or self._pipe.closed:
-                    raise
-                log.debug("browser: page not ready (%s)", exc)
-                state = None
-            if state and not state["old"] and state["ready"] == "complete":
-                if state["captcha"]:
-                    log.warning("browser: Amazon shows a CAPTCHA; the bot does not solve those")
-                    return "captcha"
-                if not state["challenge"]:
-                    self._on_site = True
-                    if challenged:
-                        log.info("browser: passed Amazon's browser check")
-                    return "page"
-                challenged = True
-            if self.clock() >= deadline:
-                return "challenge"
-            if self.wait(0.4):  # the bot is stopping
-                raise BrowserError("stopped")
+            if self._pipe is None or self._pipe.closed:
+                raise
+            # e.g. a page that's still loading; the readyState check covers it
+        self._relaxed = relaxed
+        self._doc_limit, self._docs_refused = MAX_DOCUMENTS, False
+        try:
+            nav = self._pipe.call("Page.navigate", {"url": url}, session=self._session, timeout=timeout + 10)
+            if nav.get("errorText") and not self._docs_refused:
+                raise BrowserError(f"could not load the page ({nav['errorText']})")
+            deadline = self.clock() + timeout + CHALLENGE_SECONDS
+            challenges = 0
+            while True:
+                try:
+                    state = json.loads(self._evaluate(_STATE_JS, 10))
+                except BrowserError as exc:  # the page is being replaced right now
+                    if self._pipe is None or self._pipe.closed:
+                        raise
+                    log.debug("browser: page not ready (%s)", exc)
+                    state = None
+                if self._docs_refused:
+                    return "challenge"
+                if state and not state["old"] and state["ready"] != "loading":
+                    if state["scheme"] not in ("http:", "https:"):  # e.g. chrome-error://
+                        raise BrowserError("could not load the page (the connection failed)")
+                    if state["captcha"]:
+                        log.warning("browser: Amazon shows a CAPTCHA; the bot does not solve those")
+                        return "captcha"
+                    if not state["challenge"]:
+                        host = (state.get("host") or "").lower()
+                        if host != self.site and not host.endswith("." + self.site):
+                            raise BrowserError(f"the page led to another site ({host})")
+                        self._on_site = True
+                        if challenges:
+                            log.info("browser: passed Amazon's browser check")
+                        return "page"
+                    challenges += 1
+                    if challenges >= MAX_CHALLENGES:
+                        return "challenge"
+                    try:  # so its reload shows up as a new document
+                        self._evaluate("window.__scanamznOld = 1", 10)
+                    except BrowserError:
+                        if self._pipe is None or self._pipe.closed:
+                            raise
+                if self.clock() >= deadline:
+                    if challenges:
+                        return "stuck"
+                    raise BrowserError(f"the page did not load within {timeout + CHALLENGE_SECONDS:.0f} s")
+                if self.wait(0.4):  # the bot is stopping
+                    raise BrowserStopped("stopped")
+        finally:
+            self._relaxed = False
+            self._doc_limit = None
+
+
+def _needs_challenge(page: Response) -> bool:
+    """fetch() got Amazon's challenge (202, also seen with 200), not a CAPTCHA."""
+    if _is_captcha(page.text):
+        return False
+    return page.status_code in (202, 405) or "gokuprops" in page.text[:50000].lower()
 
 
 def _is_captcha(text: str) -> bool:
