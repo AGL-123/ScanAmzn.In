@@ -38,7 +38,8 @@ control_queries = ["usb c cable", "a4 notebook", "ballpoint pen"]
 # browser`), which also reads any page that gets a bot check. `ps5 probe`
 # measures them. "requests", "curl", "curl_cffi" or "browser" use only that.
 http_backend = "auto"
-# The Chromium program; empty = found by itself (Termux: chromium-browser).
+# The Chromium program; empty = found by itself (Termux: headless_shell, and
+# chromium-browser as the second engine).
 browser_path = ""
 # Optional HTTP(S) proxy, e.g. "http://user:pass@host:port".
 proxy = ""

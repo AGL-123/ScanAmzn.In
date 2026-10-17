@@ -173,7 +173,10 @@ while it is closed. Do these once:
 4. **Android 14 or newer**: Settings → Developer options → turn on **Disable
    child process restrictions**. To see Developer options, tap *Build number*
    7 times in *About phone*. Leave Developer options switched on, or this
-   setting resets.
+   setting resets. (**Android 12 or 13**: if Developer options has *Feature
+   flags*, turn off *settings_enable_monitor_phantom_procs* there; otherwise
+   it needs a computer, see <https://github.com/agnostic-apollo/Android-Docs/blob/master/en/docs/apps/processes/phantom-cached-and-empty-processes.md>.
+   It matters mostly for the browser engine of Step 7.)
 
 While the bot runs, the Termux notification says **wake lock held**. Don't tap
 **Exit** in that notification; that stops the bot.
@@ -208,8 +211,9 @@ Type this in Termux, on Wi-Fi:
 ps5 browser
 ```
 
-It installs **Chromium** (the open-source engine of Chrome) from Termux's own
-repository: about 150-300 MB to download and 1 GB of space. The bot never shows a
+It first brings Termux's packages up to date, then installs **Chromium** (the
+open-source engine of Chrome) from Termux's own repository: about 150-300 MB to
+download and 1 GB of space, and checks that it runs. The bot never shows a
 window. From then on, when Amazon asks for a bot check, the bot loads that page
 with the browser engine at once: it runs Amazon's test like any visitor's
 browser, so the check succeeds within seconds instead of being lost. If Amazon
@@ -223,11 +227,11 @@ keeps asking, the bot reads every page through the browser until it stops.
 * The package has a light engine (used first) and the full Chromium (used
   when the light one is stopped or won't start), so there is a second chance
   built in.
-* It needs about 200-500 MB of memory while it runs. On **Android 14 or newer**,
-  make sure Step 5.4 (*Disable child process restrictions*) is on: Android
-  otherwise closes apps that start several processes, as a browser does.
+* It needs about 200-500 MB of memory while it runs (only one engine runs at a
+  time). Make sure Step 5.4 is done: Android otherwise closes apps that start
+  several processes, as a browser does.
 * When it's installed, `ps5 browser` runs **PS5 Test connection** (below) by
-  itself and sends you the result.
+  itself, sends you the result and restarts the bot so it uses the browser.
 
 To remove it again: `ps5 browser remove`.
 
@@ -243,7 +247,7 @@ To remove it again: `ps5 browser remove`.
 | **PS5 Test alert** | Sends a test message on every channel you set up. |
 | **PS5 Settings** | Asks the setup questions again, including how often to check in each mode (focused mode: every 10 seconds or more). Press Enter to keep an answer, type `-` to remove a channel. Restarts the bot with the new settings. |
 | **PS5 Check now** | Self-test against the real Amazon.in: shows what it finds and whether it would see a restock, and sends the result to Telegram/e-mail (see below). |
-| **PS5 Test connection** | Tries every way the bot can ask Amazon for a page (*request styles*: the bot's own requests in a few variants, the curl program, the browser engine from Step 7) on the two main cards, at the bot's own pace, and sends you a table of which got through. The bot then uses them in that order. Takes 2-4 minutes; the bot pauses meanwhile. Use it when **PS5 Status** shows bot checks often, or after moving to another network. |
+| **PS5 Test connection** | Tries every way the bot can ask Amazon for a page (*request styles*: the bot's own requests in a few variants, the curl program, the browser engine from Step 7) on the two main cards, at the bot's own pace, and sends you a table of which got through. The bot then uses them in that order. Takes about 5-10 minutes; the bot pauses meanwhile. Use it when **PS5 Status** shows bot checks often, or after moving to another network. |
 | **PS5 Extensive mode** | Switches between the default **focused mode** (only the two cards that come back most often, Rs.4000 and Rs.2000, every 30 s unless you chose otherwise in PS5 Settings) and the **extensive mode** (every value from Rs.500 to Rs.12,000 plus Amazon searches, every ~60 s). Tap again to switch back. |
 | **PS5 Data saver** | On mobile data, tap this **instead of stopping the bot**: it checks fewer pages, half as often. Tap it again on Wi-Fi. |
 
@@ -402,6 +406,18 @@ nothing. Battery use is modest, but keep the phone on the charger if you can.
 * **"Amazon shows a CAPTCHA"**: Amazon wants a picture puzzle solved, which the
   bot never does. It waits and tries again; if it keeps happening, check less
   often for a while (**PS5 Settings**) or switch networks.
+* **`ps5 browser` says it could not install Chromium**: follow the steps it
+  prints (`dpkg --configure -a` if asked, then `pkg upgrade`, then `ps5 browser`
+  again). If it installs but *does not run on this phone*, send `ps5 export`.
+* **"'browser' could not read it", "the browser has quit" or "the browser's
+  page crashed" in the log**: Android closed the browser engine. The bot starts
+  it again by itself, but if this repeats, redo Step 5 (especially 5.4) and keep
+  the phone on the charger. The bot meanwhile uses its other engine and request
+  styles.
+* **"'browser' got a bot check too" / PS5 Status shows bot checks for
+  `browser`**: Amazon is asking this connection for more than a browser check.
+  The bot keeps trying by itself; checking less often (**PS5 Settings**) or
+  another network (Wi-Fi / mobile data) helps.
 * **Buttons don't appear in the widget**: open Termux once, then tap the
   widget's refresh icon. Termux and its add-ons must come from the same store.
 * **Something else**: `ps5 log` shows the last log lines.

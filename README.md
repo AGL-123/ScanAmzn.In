@@ -101,6 +101,8 @@ which asks for your Gmail and WhatsApp details and writes `config.toml`.
 | `check-config` | Validate the settings and show what will be watched and where alerts go. |
 | `status` | Show what the running monitor is doing (needs `monitor.status_file`). |
 | `selftest [--send]` | Check against the live site that Amazon.in is read correctly, including an in-stock reference product (see below). `--send` also sends the report. |
+| `probe [--send] [--tries N] [--style S]` | Try every request style on the watched cards at the monitor's pace and store the order that works (`request-ranking`; a running monitor picks it up). |
+| `browser-check` | Start each installed Chromium the way the bot uses it and say whether it runs. |
 | `parse FILE [--search]` | Parse a saved Amazon page, for debugging. |
 
 ### Settings from environment variables
