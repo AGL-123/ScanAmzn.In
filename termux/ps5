@@ -244,6 +244,16 @@ PY
   fi
 }
 
+restart_if_wanted() {
+  # Start the monitor again if the user wants it on (PS5 Stop removes the
+  # flag): it then uses the newly installed browser, and the Python a package
+  # upgrade may have brought.
+  if [ -f "$ENABLED" ]; then
+    stop
+    start
+  fi
+}
+
 browser() {
   # A real browser engine (Chromium). When Amazon answers with a bot check,
   # the bot reads the page with it: it runs Amazon's check like any visitor's
@@ -255,7 +265,7 @@ browser() {
       apt autoremove -y </dev/null >/dev/null 2>&1 || true # the libraries it brought along
       rm -rf "$STATE_DIR/browser" "$STATE_DIR/browser-check" "$STATE_DIR/browser-cli"
       say "Browser removed; the bot uses its other request styles."
-      if is_running; then stop; start; fi
+      restart_if_wanted
       ;;
     *)
       echo "Installing Chromium, a real browser engine (about 150-300 MB to download, 1 GB of space - use Wi-Fi)."
@@ -270,6 +280,7 @@ browser() {
         echo "  1. If the messages mention an interrupted dpkg, run:  dpkg --configure -a"
         echo "  2. Then run:  pkg upgrade"
         echo "  3. If downloads keep failing, choose another mirror:  termux-change-repo"
+        restart_if_wanted
         return 1
       fi
       ensure_packages # an upgrade can bring a new Python, which drops the bot's packages
@@ -279,21 +290,17 @@ browser() {
         echo
         echo "Chromium is installed but does not run on this phone (see above)."
         echo "Run 'pkg upgrade' and then 'ps5 browser' again. If it still fails: ps5 export, and send the files."
+        restart_if_wanted
         return 1
       fi
       say "Browser installed and working."
-      local was_running=0
-      is_running && was_running=1
-      rm -rf "$LOCK" # the test below takes minutes; don't block the buttons
-      # The monitor picks up the browser (and the test's results) when it
-      # starts: restart it afterwards - also if this window is closed meanwhile.
-      trap '[ "$was_running" = 1 ] && "$APP_DIR/termux/ps5" restart >/dev/null 2>&1; exit 1' HUP INT TERM
+      restart_if_wanted # the monitor finds the browser when it starts
+      rm -rf "$LOCK"    # the test below takes minutes; don't block the buttons
       trap - EXIT
       echo
-      echo "Now testing which way of asking works best on this network. The bot waits meanwhile."
+      echo "Now testing which way of asking works best on this network. The bot waits meanwhile,"
+      echo "and uses the result by itself afterwards."
       python -m scanamzn -c "$CONFIG" probe --send
-      trap - HUP INT TERM
-      if [ "$was_running" = 1 ]; then "$APP_DIR/termux/ps5" restart; fi
       ;;
   esac
 }

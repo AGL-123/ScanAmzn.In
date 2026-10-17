@@ -87,7 +87,8 @@ IMPORTANT so Android does not stop the monitor: Settings > Apps > Termux >
 Battery > Unrestricted, and allow "Display over other apps". See PHONE.md.
 
 Recommended, on Wi-Fi: ps5 browser - adds a browser engine so that a bot
-check from Amazon doesn't cost a check (PHONE.md, Step 7).
+check from Amazon doesn't cost a check (PHONE.md, Step 7). Needed if
+PS5 Status shows bot checks again and again.
 MSG
 
   local answer

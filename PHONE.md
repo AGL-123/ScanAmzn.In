@@ -198,7 +198,7 @@ bot can't warn you itself. A free outside service can:
 The bot checks in every few minutes while it runs. If it goes quiet for half
 an hour, healthchecks.io e-mails you, and you can tap **PS5 Start**.
 
-## Step 7 (recommended): Add the browser engine, so no check is lost (10 min, Wi-Fi)
+## Step 7 (recommended): Add the browser engine, so no check is lost (15-30 min, Wi-Fi)
 
 Now and then Amazon answers the bot with a **bot check** instead of the page:
 a short page with a JavaScript test that only a real web browser can run (your
@@ -230,8 +230,9 @@ keeps asking, the bot reads every page through the browser until it stops.
 * It needs about 200-500 MB of memory while it runs (only one engine runs at a
   time). Make sure Step 5.4 is done: Android otherwise closes apps that start
   several processes, as a browser does.
-* When it's installed, `ps5 browser` runs **PS5 Test connection** (below) by
-  itself, sends you the result and restarts the bot so it uses the browser.
+* When it's installed, `ps5 browser` restarts the bot so it uses the browser,
+  then runs **PS5 Test connection** (below) and sends you the result; the bot
+  uses that result by itself. Keep Termux open until it says it's done.
 
 To remove it again: `ps5 browser remove`.
 
