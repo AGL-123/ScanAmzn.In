@@ -22,6 +22,16 @@ CHALLENGE = (
 CAPTCHA = '<html><script>window.gokuProps = {}</script><script src="/captcha.js"></script></html>'
 # A challenge whose script comes from a path the strict filter refuses.
 SCRIPT_CHALLENGE = '<html><head><script>window.gokuProps = {key: 1};</script><script src="/waf.js"></script></head></html>'
+# A challenge that never finishes (its script never reloads the page).
+STUCK_CHALLENGE = "<html><head><script>window.gokuProps = {key: 1};</script></head><body>Please wait</body></html>"
+# A challenge whose script keeps the page busy before it reloads (a slow phone).
+BUSY_CHALLENGE = (
+    "<html><head><script>window.gokuProps = {{key: 1}};</script>"
+    "<script>window.addEventListener('load', function () {{ setTimeout(function () {{"
+    " const end = Date.now() + {busy}; while (Date.now() < end) {{}}"
+    " document.cookie = 'aws-waf-token=' + Date.now() + '; path=/'; location.reload(); }}, 50); }});</script>"
+    "</head><body>Please wait</body></html>"
+)
 WAF_JS = "document.cookie = 'aws-waf-token=' + Date.now() + '; path=/'; location.reload();"
 
 
@@ -35,6 +45,9 @@ class FakeAmazon:
         self.accept_tokens = True  # False: every token is refused (the browser is challenged again and again)
         self.drop_pages = 0  # drop this many /dp/ requests (no answer: a network blip)
         self.drop_token_reloads = 0  # drop this many /dp/ requests that carry a token (the challenge's reload)
+        self.stuck_challenge = False  # the challenge never reloads
+        self.busy_ms = 0  # the challenge keeps the page busy this long before reloading
+        self.hang_seconds = 0.0  # /dp/ answers only after this long (a stalled mobile connection)
         site = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -48,6 +61,8 @@ class FakeAmazon:
                 if not self.path.startswith("/dp/"):
                     return self._send(200, "x")
                 cookie = self.headers.get("Cookie") or ""
+                if site.hang_seconds:
+                    time.sleep(site.hang_seconds)
                 if site.drop_pages or (site.drop_token_reloads and "aws-waf-token=" in cookie):
                     if site.drop_pages:
                         site.drop_pages -= 1
@@ -60,6 +75,10 @@ class FakeAmazon:
                 if not (site.accept_tokens and site._token_ok(cookie)):
                     if site.script_challenge:
                         return self._send(site.challenge_status, SCRIPT_CHALLENGE)
+                    if site.stuck_challenge:
+                        return self._send(site.challenge_status, STUCK_CHALLENGE)
+                    if site.busy_ms:
+                        return self._send(site.challenge_status, BUSY_CHALLENGE.format(busy=site.busy_ms))
                     return self._send(site.challenge_status, CHALLENGE.format(delay=challenge_delay_ms))
                 return self._send(200, PRODUCT.format(path=self.path))
 

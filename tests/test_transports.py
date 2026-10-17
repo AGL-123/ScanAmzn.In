@@ -122,7 +122,7 @@ def test_a_crashed_page_is_noticed_at_once_and_the_check_still_succeeds(site, br
     time.sleep(0.5)
     started = time.monotonic()
     page = browser.get(f"{site.base}/dp/B093QF35KZ")
-    assert page.status_code == 200 and time.monotonic() - started < 15  # not the 30 s evaluate timeout
+    assert page.status_code == 200 and time.monotonic() - started < 4  # no 30 s timeout, no 5 s wait to kill
 
 
 @needs_browser
@@ -552,3 +552,105 @@ def test_browser_check_command(monkeypatch, tmp_path, capsys):
     assert cli.main(["browser-check"]) == 1
     out = capsys.readouterr().out
     assert "❌ browser" in out and "libfoo.so not found" in out
+
+
+# --- round two: slow is not dead, hard limits, quiet browser ---------------------------------
+
+
+@needs_browser
+def test_a_stalled_connection_is_a_slow_page_not_a_dead_browser(site, browser, monkeypatch):
+    import time
+
+    from scanamzn import browser as browser_mod
+
+    monkeypatch.setattr(browser_mod, "CHALLENGE_SECONDS", 1.0)
+    browser.get(f"{site.base}/dp/B07K6RYVJ5")
+    pid = browser._pipe.proc.pid
+    site.expire_tokens()
+    site.hang_seconds = 12  # the phone's connection stalls
+    site.hits.clear()
+    started = time.monotonic()
+    with pytest.raises(Exception, match="did not load within"):  # a network-type error
+        browser.get(f"{site.base}/dp/B093QF35KZ", timeout=2)
+    assert time.monotonic() - started < 25
+    assert site.hits["/dp/B093QF35KZ"] <= 2  # fetch(), maybe the navigation - never sent again
+    assert browser._pipe is not None and browser._pipe.proc.pid == pid  # not killed and restarted
+    site.hang_seconds = 0
+    time.sleep(12)  # let the stalled requests finish
+    assert browser.get(f"{site.base}/dp/B093QF35KZ").status_code == 200
+
+
+@needs_browser
+def test_a_busy_challenge_page_is_waited_for(site, browser):
+    site.busy_ms = 11000  # longer than one 10 s state poll
+    page = browser.get(f"{site.base}/dp/B07K6RYVJ5", timeout=20)
+    assert page.status_code == 200 and site.hits["/dp/B07K6RYVJ5"] == 2  # not restarted, not re-requested
+
+
+@needs_browser
+def test_the_page_load_cap_holds_even_for_an_instant_challenge(tmp_path):
+    import time
+
+    site = FakeAmazon(challenge_delay_ms=0)
+    session = BrowserSession(BROWSER, "127.0.0.1", tmp_path / "p")
+    try:
+        site.accept_tokens = False
+        page = session.get(f"{site.base}/dp/B07K6RYVJ5")
+        assert page.status_code == 202
+        from scanamzn.browser import MAX_DOCUMENTS
+
+        assert site.hits["/dp/B07K6RYVJ5"] <= MAX_DOCUMENTS
+        hits = site.hits["/dp/B07K6RYVJ5"]
+        time.sleep(1.5)
+        session._alive()  # anything paused meanwhile is answered now - and refused
+        time.sleep(0.5)
+        assert site.hits["/dp/B07K6RYVJ5"] == hits
+    finally:
+        session.close()
+        site.close()
+
+
+@needs_browser
+def test_a_stuck_challenge_gets_no_second_try_when_nothing_was_held_back(site, browser, monkeypatch):
+    from scanamzn import browser as browser_mod
+
+    monkeypatch.setattr(browser_mod, "CHALLENGE_SECONDS", 1.0)
+    site.stuck_challenge = True
+    page = browser.get(f"{site.base}/dp/B07K6RYVJ5", timeout=2)
+    assert page.status_code == 202
+    assert site.hits["/dp/B07K6RYVJ5"] == 1 and "/favicon.ico" not in site.hits  # one load, no favicon
+
+
+def test_the_request_filter():
+    session = BrowserSession("/bin/false", "www.amazon.in", "/nonexistent")
+    sent = []
+    session._pipe = type("P", (), {"send": lambda self, method, params, sid: sent.append(method)})()
+    session._main_frame = "MAIN"
+
+    def decide(url, kind, frame="OTHER"):
+        sent.clear()
+        session._on_request({"request": {"url": url}, "resourceType": kind, "requestId": "1", "frameId": frame},
+                            "S")
+        return sent[0] == "Fetch.continueRequest"
+
+    assert decide("https://abc.eu-central-1.token.awswaf.com/abc/challenge.js", "Script")
+    assert not decide("https://abc.ap-south-1.captcha.awswaf.com/abc/captcha.js", "Script")  # never the puzzle
+    assert decide("https://www.amazon.in/dp/B0X", "Fetch")
+    assert not decide("https://m.media-amazon.com/images/x.jpg", "Image")
+    assert not decide("https://www.amazon.in/favicon.ico", "Other")
+    assert not decide("https://aax-eu.amazon-adsystem.com/x", "Document")
+    # Page loads of the tab: only while a load is under way, and only so many.
+    assert not decide("https://www.amazon.in/dp/B0X", "Document", "MAIN")
+    session._doc_limit = 2
+    assert decide("https://www.amazon.in/dp/B0X", "Document", "MAIN")
+    assert not decide("https://www.amazon.com/ap/signin", "Document", "MAIN")  # another site
+    assert not decide("https://www.amazon.in/dp/B0X", "Document", "MAIN") and session._docs_refused
+
+
+def test_the_browser_may_reach_only_amazon_and_the_check():
+    args = BrowserSession("/usr/bin/headless_shell", "www.amazon.in", "/tmp/x")._args()
+    rules = next(a for a in args if a.startswith("--host-resolver-rules="))
+    assert "MAP * ~NOTFOUND" in rules and "EXCLUDE amazon.in" in rules and "EXCLUDE *.awswaf.com" in rules
+    assert "--headless=new" not in args  # the headless shell is headless anyway
+    proxied = BrowserSession("/usr/bin/chromium-browser", "www.amazon.in", "/tmp/x", proxy="http://p:8080")._args()
+    assert not any(a.startswith("--host-resolver-rules=") for a in proxied) and "--headless=new" in proxied

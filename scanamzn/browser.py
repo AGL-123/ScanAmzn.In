@@ -25,6 +25,7 @@ import collections
 import json
 import logging
 import os
+import re
 import select
 import shutil
 import signal
@@ -77,15 +78,22 @@ _LAUNCHER = (
 
 # Where the open page stands: still loading, our old page (before a
 # navigation started), Amazon's challenge, or a CAPTCHA the bot won't solve.
-_STATE_JS = """JSON.stringify({
-  ready: document.readyState,
-  scheme: location.protocol,
-  host: location.hostname,
-  old: !!window.__scanamznOld,
-  challenge: !!window.gokuProps,
-  captcha: !!(window.AwsWafCaptcha || document.querySelector(
-    'script[src*="captcha.js"], form[action*="validateCaptcha"], #captcha-container')),
-})"""
+# A challenge page is marked as seen in the same step, so its reload shows up
+# as a new document (marking it separately could mark the next page instead).
+_STATE_JS = """(() => {
+  const s = {
+    ready: document.readyState,
+    scheme: location.protocol,
+    host: location.hostname,
+    old: !!window.__scanamznOld,
+    challenge: !!window.gokuProps,
+    captcha: !!(window.AwsWafCaptcha || document.querySelector(
+      'script[src*="captcha.js"], script[src*="captcha.awswaf"], form[action*="validateCaptcha"], ' +
+      '#captcha-container')),
+  };
+  if (s.challenge && !s.captcha && !s.old && s.ready !== 'loading') window.__scanamznOld = 1;
+  return JSON.stringify(s);
+})()"""
 _DOCUMENT_JS = """JSON.stringify({
   status: (performance.getEntriesByType('navigation')[0] || {}).responseStatus || 0,
   url: location.href,
@@ -108,6 +116,10 @@ class BrowserError(Exception):
 
 class BrowserStopped(BrowserError):
     """The bot is stopping."""
+
+
+class BrowserTimeout(BrowserError):
+    """The browser didn't answer in time: a slow page (network) or a hung browser."""
 
 
 def find_browser(path: str = "", names: tuple[str, ...] = BROWSER_NAMES) -> str | None:
@@ -185,9 +197,8 @@ class _Pipe:
                 if self.closed:  # e.g. the page crashed while we waited
                     raise BrowserError(self.closed_reason or "the browser has quit")
                 left = deadline - time.monotonic()
-                if left <= 0:
-                    self.closed = True  # hung: start a new one rather than wait on it again
-                    raise BrowserError(f"the browser did not answer {method} within {timeout:.0f} s")
+                if left <= 0:  # a slow page, or a hung browser: the caller tells them apart
+                    raise BrowserTimeout(f"the browser did not answer {method} within {timeout:.0f} s")
                 self._read(left)
             reply = self._results.pop(msg_id)
         finally:
@@ -258,7 +269,10 @@ class BrowserSession:
         self.recently_blocked: collections.deque[str] = collections.deque(maxlen=8)
         self._relaxed = False  # during the second try only: a wider filter
         self._main_frame: str | None = None
-        self._doc_limit: int | None = None  # while loading: page loads still allowed
+        # Page loads (main-frame documents) still allowed: MAX_DOCUMENTS while
+        # _load waits for a page, none at other times - so nothing, e.g. a
+        # challenge page left behind, can load pages from Amazon unasked.
+        self._doc_limit = 0
         self._docs_refused = False
 
     # -- process ------------------------------------------------------------------
@@ -272,8 +286,8 @@ class BrowserSession:
             "--disable-client-side-phishing-detection", "--no-pings", "--disk-cache-size=20000000",
             "--blink-settings=imagesEnabled=false", "--renderer-process-limit=1",
             "--disable-features=Translate,MediaRouter,OptimizationHints,AutofillServerCommunication,"
-            "SpareRendererForSitePerProcess",
-            "--lang=en-IN", "--window-size=1366,768",
+            "SpareRendererForSitePerProcess,NetworkTimeServiceQuerying",
+            "--no-service-autorun", "--lang=en-IN", "--window-size=1366,768",
         ]
         if not shell:
             args.insert(0, "--headless=new")
@@ -284,6 +298,12 @@ class BrowserSession:
             args[:0] = ["--no-sandbox", "--no-zygote"]
         if self.proxy:
             args.append(f"--proxy-server={self.proxy}")
+        else:
+            # The full Chromium keeps calling Google's servers (time, sign-in)
+            # despite the flags above: let it reach only Amazon and AWS's check.
+            allowed = [self.site, f"*.{self.site}", "*.awswaf.com", "*.media-amazon.com",
+                       "*.ssl-images-amazon.com", "*.cloudfront.net"]
+            args.append("--host-resolver-rules=MAP * ~NOTFOUND, " + ", ".join(f"EXCLUDE {h}" for h in allowed))
         return args + ["about:blank"]
 
     def _start(self) -> None:
@@ -338,13 +358,15 @@ class BrowserSession:
         log.info("browser started (%s, pid %d)", Path(self.binary).name, proc.pid)
 
     def _last_words(self) -> str:
+        """Why it didn't start: the telling line of its log, else the last one."""
         if self.log_path is None:
             return ""
         try:
             lines = [ln for ln in self.log_path.read_text(errors="replace").splitlines() if ln.strip()]
         except OSError:
             return ""
-        return lines[-1][:200] if lines else ""
+        telling = [ln for ln in lines if _WHY.search(ln)]
+        return (telling[-1] if telling else lines[-1])[:300] if lines else ""
 
     def _on_crash(self, params: dict, session: str | None) -> None:
         if self._pipe is not None and session == self._session:
@@ -359,10 +381,10 @@ class BrowserSession:
         self._session, self._on_site = None, False
         if pipe is None:
             return
-        if not pipe.closed:
+        if pipe.proc.poll() is None:  # also after its page crashed: let it shut down cleanly
             try:
-                pipe.send("Browser.close")
-            except BrowserError:
+                os.write(pipe.out_fd, json.dumps({"id": pipe._next_id + 1, "method": "Browser.close"}).encode() + b"\0")
+            except OSError:
                 pass
         try:
             pipe.proc.wait(5)
@@ -384,16 +406,22 @@ class BrowserSession:
         images, styles, fonts, ads and other scripts (data and battery)."""
         url = (params.get("request") or {}).get("url", "")
         kind = params.get("resourceType", "")
-        host = (urlsplit(url).hostname or "").lower()
+        parts = urlsplit(url)
+        host = (parts.hostname or "").lower()
         ours = host == self.site or host.endswith("." + self.site)
-        if kind == "Document" and params.get("frameId") == self._main_frame and self._doc_limit is not None:
-            self._doc_limit -= 1
-            if self._doc_limit < 0:  # the challenge keeps reloading: Amazon refuses the browser
+        note = kind not in _HEAVY
+        if kind == "Document" and params.get("frameId") == self._main_frame:
+            if self._doc_limit > 0:
+                self._doc_limit -= 1
+                allow = ours
+            else:  # the challenge keeps reloading (Amazon refuses the browser), or nobody asked
                 self._docs_refused = True
-                ours = False
-        if self._docs_refused and kind == "Document" and params.get("frameId") == self._main_frame:
-            allow = False
-        elif host.endswith(".awswaf.com") or (ours and kind in ("Document", "XHR", "Fetch")):
+                allow = note = False
+        elif parts.path.endswith("/favicon.ico"):
+            allow = note = False
+        elif host.endswith(".awswaf.com"):
+            allow = "captcha" not in host  # AWS's challenge, never its CAPTCHA puzzle
+        elif ours and kind in ("Document", "XHR", "Fetch"):
             allow = True
         elif self._relaxed:  # anything but heavy files and other sites' pages (ads)
             allow = kind not in _HEAVY and (kind != "Document" or ours)
@@ -404,7 +432,7 @@ class BrowserSession:
         else:
             method, extra = "Fetch.failRequest", {"errorReason": "BlockedByClient"}
             self.blocked_requests += 1
-            if kind not in _HEAVY:
+            if note:
                 self.recently_blocked.append(f"{kind} {host}")
         try:
             self._pipe.send(method, {"requestId": params.get("requestId"), **extra}, session)
@@ -437,22 +465,41 @@ class BrowserSession:
         for attempt in (1, 2):
             if not self._alive():
                 self.close()
+                if attempt == 2 and self.pace is not None and not self.pace():  # a request like any other
+                    raise BrowserStopped("stopped")
                 self._start()
             try:
                 return self._get(url, timeout)
             except BrowserStopped:
                 raise
+            except BrowserTimeout as exc:
+                # Slow (the network) or hung (the browser)? Ask it something cheap.
+                if self._responsive():
+                    error: BrowserError = BrowserError(f"the page did not load within {timeout + 10:.0f} s")
+                else:
+                    self._pipe.closed, self._pipe.closed_reason = True, f"the browser hung ({exc})"
+                    error = exc
             except BrowserError as exc:
-                # Load the next page in the tab rather than fetch() from what
-                # may now be an error page.
-                self._on_site = False
-                died = self._pipe is None or self._pipe.closed
-                if died:
-                    self.close()
-                if not died or attempt == 2:
-                    raise
-                log.info("browser: %s; starting it again", exc)
+                error = exc
+            # Load the next page in the tab rather than fetch() from what may
+            # now be an error page; a dead browser is started again, once.
+            self._on_site = False
+            died = self._pipe is None or self._pipe.closed
+            if died:
+                self.close()
+            else:
+                self._leave()  # a half-loaded page must not keep running
+            if not died or attempt == 2:
+                raise error
+            log.info("browser: %s; starting it again", error)
         raise AssertionError("unreachable")
+
+    def _responsive(self) -> bool:
+        try:
+            self._pipe.call("Browser.getVersion", timeout=5)
+        except BrowserError:
+            return False
+        return True
 
     def _get(self, url: str, timeout: float) -> Response:
         if self._on_site:
@@ -463,7 +510,13 @@ class BrowserSession:
         return self._navigate(url, timeout)
 
     def _fetch(self, url: str, timeout: float) -> Response:
-        value = self._evaluate(_FETCH_JS % (int(timeout * 1000), json.dumps(url)), timeout + 10, await_promise=True)
+        try:
+            value = self._evaluate(_FETCH_JS % (int(timeout * 1000), json.dumps(url)), timeout + 10,
+                                   await_promise=True)
+        except BrowserError as exc:
+            if str(exc).startswith("AbortError"):  # our own time limit: a slow network
+                raise BrowserError(f"the page did not load within {timeout:.0f} s") from exc
+            raise
         data = json.loads(value)
         return Response(url=data.get("url") or url, status_code=int(data["status"]), text=data["text"])
 
@@ -482,9 +535,16 @@ class BrowserSession:
         if outcome in ("stuck", "challenge"):
             log.warning("browser: Amazon's browser check did not let the browser through (%s)",
                         "it asked again" if outcome == "challenge" else "it did not finish")
-        data = json.loads(self._evaluate(_DOCUMENT_JS, 20))
-        if outcome != "page":
-            self._leave()
+        try:
+            try:
+                data = json.loads(self._evaluate(_DOCUMENT_JS, 20))
+            except BrowserError:
+                if outcome == "page" or self._pipe is None or self._pipe.closed:
+                    raise
+                data = {}  # a bot check either way; the page was being replaced
+        finally:
+            if outcome != "page":
+                self._leave()
         status = int(data.get("status") or 0)
         # Judge by the page itself (the status can be the challenge's 202 even
         # after the browser got past it, or 200 on Amazon's own CAPTCHA page).
@@ -544,14 +604,9 @@ class BrowserSession:
                         if challenges:
                             log.info("browser: passed Amazon's browser check")
                         return "page"
-                    challenges += 1
+                    challenges += 1  # (_STATE_JS marked it, so its reload is a new document)
                     if challenges >= MAX_CHALLENGES:
                         return "challenge"
-                    try:  # so its reload shows up as a new document
-                        self._evaluate("window.__scanamznOld = 1", 10)
-                    except BrowserError:
-                        if self._pipe is None or self._pipe.closed:
-                            raise
                 if self.clock() >= deadline:
                     if challenges:
                         return "stuck"
@@ -560,7 +615,12 @@ class BrowserSession:
                     raise BrowserStopped("stopped")
         finally:
             self._relaxed = False
-            self._doc_limit = None
+            self._doc_limit = 0
+
+
+# Lines in a browser's log that say why it didn't start.
+_WHY = re.compile(r"CANNOT LINK|error while loading|cannot locate symbol|not found|FATAL|Check failed|"
+                  r"Permission denied|Segmentation|Aborted", re.IGNORECASE)
 
 
 def _needs_challenge(page: Response) -> bool:
