@@ -340,9 +340,12 @@ class Fetcher:
             session.headers.update({"Accept-Language": _BROWSER_HEADERS["Accept-Language"]})
             log.debug("new curl_cffi session impersonating %s", target)
         elif p.transport == "browser":
+            budget = self.budget
             session = BrowserSession(
                 self.browser_paths[p.name], self.domain, self.browser_dir / p.name, proxy=self.proxy,
                 log_path=self.browser_dir / f"{p.name}.log", wait=self.wait,
+                # its extra load (a second try at Amazon's check) counts like any request
+                pace=(lambda: budget.acquire(self.wait)) if budget is not None else None,
             )
         else:
             if p.transport == "curl":
