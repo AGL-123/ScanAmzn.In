@@ -159,8 +159,8 @@ def test_a_slow_failing_browser_is_not_tried_again(styles):
     results = probe.run(urls, ["browser"], lambda n: fetcher_mod.Fetcher(only=n, rescue=False),
                         wait=lambda t: None, progress=lambda text: None, spacing=5, tries=4,
                         clock=clock, slow=30, browsers={"browser"})
-    assert results[0].blocked == 4 and results[0].cut_short and len(sent) == 1
-    assert "stopped after a slow failure" in results[0].line()
+    assert results[0].blocked == 2 and results[0].cut_short and len(sent) == 2  # two slow ones, then it stops
+    assert "stopped after two slow failures" in results[0].line()
 
 
 def test_duration_estimate_covers_slow_browsers():
@@ -176,3 +176,58 @@ def test_refused_browser_gets_its_own_advice(styles):
                         wait=lambda t: None, progress=lambda text: None, spacing=5, tries=1, browsers={"browser"})
     text = probe.summary(results, probe.rank(results), False, 1, 5, browser_missing=False, browsers={"browser"})
     assert "not even the browser engine" in text
+
+
+def test_one_slow_page_doesnt_condemn_the_browser(styles):
+    answers, sent = styles
+    calls = []
+
+    def browser_answer(name, url):
+        calls.append(url)
+        return RuntimeError("the page did not load within 35 s") if len(calls) == 1 else 200
+
+    answers["browser"] = None
+    import scanamzn.fetcher as fm
+
+    real = fm.Fetcher._new_session
+    now = [0.0]
+
+    def clock():
+        now[0] += 25  # each try seems to take 50 s
+        return now[0]
+
+    urls = [("B07K6RYVJ5", "https://www.amazon.in/dp/B07K6RYVJ5")]
+    answers_fn = {"browser": browser_answer}
+    fm.Fetcher._new_session = lambda self, p: _Session(lambda n, u: answers_fn[n](n, u), sent, p.name)
+    try:
+        results = probe.run(urls, ["browser"], lambda n: fetcher_mod.Fetcher(only=n, rescue=False),
+                            wait=lambda t: None, progress=lambda text: None, spacing=5, tries=4,
+                            clock=clock, slow=30, browsers={"browser"})
+    finally:
+        fm.Fetcher._new_session = real
+    r = results[0]
+    assert not r.cut_short and r.read == 3 and r.errors == 1 and r.network_errors == 1
+    text = probe.summary(results, probe.rank(results), True, 4, 5, browser_missing=False, browsers={"browser"})
+    assert "did not work on this phone" not in text
+
+
+def test_a_network_outage_during_the_test_is_called_that(styles):
+    answers, sent = styles
+    import requests
+
+    outage = requests.ConnectionError("NameResolutionError: Failed to resolve 'www.amazon.in'")
+    answers.update({"legacy": outage, "browser": RuntimeError("could not load the page (net::ERR_INTERNET_DISCONNECTED)")})
+    urls = [("B07K6RYVJ5", "https://www.amazon.in/dp/B07K6RYVJ5")]
+    results = probe.run(urls, ["legacy", "browser"], lambda n: fetcher_mod.Fetcher(only=n, rescue=False),
+                        wait=lambda t: None, progress=lambda text: None, spacing=5, tries=2, browsers={"browser"})
+    assert all(r.errors == r.network_errors == 2 for r in results)
+    text = probe.summary(results, probe.rank(results), False, 2, 5, browser_missing=False, browsers={"browser"})
+    assert "connection failed or was very slow" in text
+    assert "did not work on this phone" not in text and "Run `ps5 browser` again" not in text
+
+
+def test_network_failures_dont_push_a_browser_below_blocked_styles():
+    blocked = probe.StyleResult("legacy", blocked=4)
+    offline_browser = probe.StyleResult("browser", errors=2, network_errors=2)
+    broken_browser = probe.StyleResult("chromium", errors=2)
+    assert probe.rank([blocked, offline_browser, broken_browser]) == ["browser", "legacy", "chromium"]

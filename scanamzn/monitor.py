@@ -740,13 +740,21 @@ class Monitor:
                     f"The PS5 gift card monitor has not completed a check for {minutes} minutes, "
                     "so it would miss a restock right now.\n\n"
                     f"Last problem: {self.last_problem or 'unknown'}\n\n"
-                    "It keeps retrying automatically. If this persists, Amazon may be blocking "
-                    "this machine's IP - try a longer monitor.interval_seconds or another network."
+                    f"It keeps retrying automatically. {self._health_advice()}"
                 ),
                 summary=f"ScanAmzn has not reached Amazon.in for {minutes} minutes ({self.last_problem}).",
                 kind=INFO,
             )
         )
+
+    def _health_advice(self) -> str:
+        bot_check = "captcha" in self.last_problem.lower() or "bot check" in self.last_problem.lower()
+        if bot_check and getattr(self.fetcher, "has_browser", None) is False and self.s.http_backend == "auto":
+            return ("Amazon answers with bot checks: install the browser engine, which gets past them - "
+                    "type `ps5 browser` in Termux on Wi-Fi (PHONE.md, Step 7).")
+        setting = "monitor.interval_seconds" if self.extensive else "the focused-mode interval"
+        return ("If this persists, Amazon may be checking this network harder: check less often "
+                f"(PS5 Settings: {setting}), tap PS5 Test connection, or try another network.")
 
     # -- in-stock self-test --------------------------------------------------------
     def _maybe_control(self, report: CycleReport) -> None:

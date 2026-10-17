@@ -235,6 +235,7 @@ def test_health_alert_and_recovery(fetcher, dispatcher, clock):
     assert len(dispatcher.messages) == 1
     assert "cannot check" in dispatcher.messages[0].subject
     assert "captcha" in dispatcher.messages[0].body
+    assert "ps5 browser" in dispatcher.messages[0].body  # the fix for bot checks, when it's missing
 
     m.run_cycle()
     m._check_health()

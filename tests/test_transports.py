@@ -369,7 +369,7 @@ def test_a_browser_that_gets_a_bot_check_too_is_closed_and_left_alone_for_a_whil
     assert [t for t, _ in sent] == ["requests"]  # resting: not tried again at once
     f.reset()
     assert f.profile == "curl"  # the switch skips it too
-    clock[0] += fetcher_mod.RESCUE_PAUSE_SECONDS + 1
+    clock[0] += fetcher_mod.BLOCKED_REST_SECONDS + 1  # a short rest after a bot check
     sent.clear()
     f.get("https://www.amazon.in/dp/B0X")
     assert [t for t, _ in sent] == ["curl", "browser"]
@@ -552,6 +552,7 @@ def test_browser_check_command(monkeypatch, tmp_path, capsys):
     assert cli.main(["browser-check"]) == 1
     out = capsys.readouterr().out
     assert "❌ browser" in out and "libfoo.so not found" in out
+    assert (tmp_path / "state" / "browser-check" / "browser-check.log").exists()  # for ps5 export
 
 
 # --- round two: slow is not dead, hard limits, quiet browser ---------------------------------
@@ -654,3 +655,81 @@ def test_the_browser_may_reach_only_amazon_and_the_check():
     assert "--headless=new" not in args  # the headless shell is headless anyway
     proxied = BrowserSession("/usr/bin/chromium-browser", "www.amazon.in", "/tmp/x", proxy="http://p:8080")._args()
     assert not any(a.startswith("--host-resolver-rules=") for a in proxied) and "--headless=new" in proxied
+
+
+# --- round two: one Chromium, CAPTCHAs, network failures, the hourly retry ----------------
+
+
+def _browsers_open(f):
+    return [n for n in f._sessions if f.is_browser(n)]
+
+
+def test_with_a_browser_first_a_bot_check_never_leaves_two_chromiums(make, tmp_path):
+    (tmp_path / "request-ranking").write_text("browser\nchromium\nlegacy\n")
+    answers = {"browser": 200, "chromium": 200}
+    f, sent = make(lambda t, url: answers[t], two_browsers=True)
+    opened = []
+    real_get_with = f._get_with
+
+    def watch(p, url):
+        page = real_get_with(p, url)
+        opened.append(len(_browsers_open(f)))
+        return page
+
+    f._get_with = watch
+    f.get("https://www.amazon.in/dp/B0X")
+    answers["browser"] = 202  # one bot check for the light browser
+    page = f.get("https://www.amazon.in/dp/B0Y")
+    assert page.profile == "chromium" and not page.blocked
+    answers["browser"] = 200
+    for asin in ("B0Z", "B0W", "B0V"):
+        f.get(f"https://www.amazon.in/dp/{asin}")
+        assert len(_browsers_open(f)) == 1
+    assert f.profile == "chromium"  # it took over at once
+    assert max(opened) == 1  # never two at the same moment
+
+
+def test_a_captcha_for_the_main_browser_is_not_passed_to_the_other(make, tmp_path):
+    (tmp_path / "request-ranking").write_text("browser\nchromium\n")
+    f, sent = make(lambda t, url: {"browser": 405, "chromium": 200}[t], two_browsers=True)
+    page = f.get("https://www.amazon.in/dp/B0X")
+    assert page.blocked and [t for t, _ in sent] == ["browser"] and f.last_rescue == "CAPTCHA"
+
+
+def test_a_network_failure_during_a_rescue_doesnt_bench_the_browser(make):
+    answers = {"requests": 202, "browser": RuntimeError("the page did not load within 30 s")}
+    f, sent = make(lambda t, url: answers[t])
+    page = f.get("https://www.amazon.in/dp/B0X")
+    assert page.blocked and f.last_rescue.startswith("failed:")
+    assert not f._paused("browser")  # tried again on the next bot check
+    answers["browser"] = 200
+    assert f.get("https://www.amazon.in/dp/B0Y").profile == "browser"
+
+
+def test_a_failing_best_style_is_retried_less_and_less_often(make, tmp_path):
+    clock = [0.0]
+    (tmp_path / "request-ranking").write_text("curl\nlegacy\n")
+    answers = {"curl": RuntimeError("curl exit 92: HTTP/2 stream error"), "requests": 200, "browser": 200}
+    f, sent = make(lambda t, url: answers[t], rescue=False)
+    f.clock = lambda: clock[0]
+    for _ in range(4):
+        try:
+            f.get("https://www.amazon.in/dp/B0X")
+        except fetcher_mod.FetchError:
+            pass
+    assert f.profile == "legacy"
+    waits = []
+    for _ in range(3):
+        clock[0] += f._retry_best_wait + 1
+        waits.append(f._retry_best_wait)
+        for _ in range(4):  # the retry, 3 failures, back to legacy
+            try:
+                f.get("https://www.amazon.in/dp/B0X")
+            except fetcher_mod.FetchError:
+                pass
+        assert f.profile == "legacy"
+    assert waits == [3600.0, 7200.0, 14400.0]
+    answers["curl"] = 200  # it works again: back to hourly
+    clock[0] += f._retry_best_wait + 1
+    f.get("https://www.amazon.in/dp/B0X")
+    assert f.profile == "curl" and f._retry_best_wait == fetcher_mod.RETRY_BEST_SECONDS

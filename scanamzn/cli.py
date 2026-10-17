@@ -394,20 +394,31 @@ def cmd_browser_check(args: argparse.Namespace, s: Settings) -> int:
 
     from .browser import BrowserError, BrowserSession
 
+    from .selftest import state_dir
+
     found = Fetcher(s.domain, backend="auto", browser_path=s.browser_path).browser_paths
     if not found:
         print("❌ No Chromium program found (headless_shell or chromium-browser).")
         return 1
+    logs = state_dir(s) / "browser-check"  # `ps5 export` sends these along
+    logs.mkdir(parents=True, exist_ok=True)
     working = 0
     for name, path in found.items():
+        log_path = logs / f"{name}-check.log"
         with tempfile.TemporaryDirectory(prefix="scanamzn-check-") as folder:
-            session = BrowserSession(path, s.domain, Path(folder) / "profile", log_path=Path(folder) / "log")
+            session = BrowserSession(path, s.domain, Path(folder) / "profile", log_path=log_path)
             try:
                 session._start()
                 if session._evaluate("6 * 7", 20) != 42:
                     raise BrowserError("it started but does not run pages")
             except BrowserError as exc:
                 print(f"❌ {name} ({path}) does not work on this device: {exc}")
+                try:
+                    tail = [ln for ln in log_path.read_text(errors="replace").splitlines() if ln.strip()][-6:]
+                except OSError:
+                    tail = []
+                for line in tail:
+                    print(f"     {line[:200]}")
             else:
                 print(f"✅ {name} ({path}) works")
                 working += 1

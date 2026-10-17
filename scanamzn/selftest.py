@@ -224,12 +224,18 @@ def run(settings, fetcher: Fetcher, pause: Pause, dump: Dump, progress: Callable
         return test
     if is_blocked(first.text, first.status_code):
         dump("blocked_page", first.text)
-        if getattr(fetcher, "has_browser", False):
-            advice = ("even the browser engine got one, so Amazon wants more than a browser check right now. "
+        rescue = getattr(fetcher, "last_rescue", None) or ""
+        if not getattr(fetcher, "has_browser", False):
+            advice = "the monitor waits and retries by itself. If this happens often, add the browser engine: `ps5 browser`."
+        elif rescue in ("bot check", "CAPTCHA"):
+            advice = (f"even the browser engine got a {rescue}, so Amazon wants more than a browser check right now. "
                       "The monitor keeps trying by itself; checking less often (PS5 Settings) or another network "
                       "helps. If it lasts, send `ps5 export`.")
+        elif rescue.startswith("failed:"):
+            advice = (f"and the browser engine could not read the page ({rescue[8:].strip()[-160:]}). "
+                      "If that says it did not start, run `ps5 browser` again; otherwise send `ps5 export`.")
         else:
-            advice = "the monitor waits and retries by itself. If this happens often, add the browser engine: `ps5 browser`."
+            advice = "the monitor waits and retries by itself, and reads such pages with the browser engine."
         test.checks.append(Check(
             "Amazon.in reachable", None,
             f"Amazon keeps asking for a bot check (HTTP {first.status_code}); {advice}",
